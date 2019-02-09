@@ -1,0 +1,31 @@
+{
+  "name": "discopotty",
+  "version": "0.1.0",
+  "scripts": {
+    "clean": "bsb -clean-world",
+    "build": "bsb -make-world",
+    "watch": "bsb -make-world -w"
+  },
+  "keywords": [
+    "BuckleScript"
+  ],
+  "author": "quartz55",
+  "license": "MIT",
+  "devDependencies": {
+    "bs-platform": "^4.0.18"
+  },
+  "dependencies": {
+    "@discordjs/uws": "^11.149.1",
+    "@quartz55/relog": "github:quartz55/relog#master",
+    "bs-fluture": "^0.4.1",
+    "discord.js": "github:discordjs/discord.js#master",
+    "erlpack": "github:discordapp/erlpack",
+    "fluture": "^10.3.1",
+    "let-anything": "^1.0.3",
+    "node-opus": "^0.3.1",
+    "rationale": "^0.1.10",
+    "sodium": "^3.0.2",
+    "wonka": "^1.4.4",
+    "zlib-sync": "^0.1.4"
+  }
+}
