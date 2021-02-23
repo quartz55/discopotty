@@ -1,0 +1,6 @@
+(library
+ (name discord_models)
+ (public_name discopotty.models)
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
+ (libraries containers relog.lib uri yojson))

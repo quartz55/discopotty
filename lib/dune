@@ -1,0 +1,22 @@
+(library
+ (name discord)
+ (public_name discopotty)
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv ppx_bitstring))
+ (libraries
+  discord_models
+  containers
+  containers-data
+  relog.lib
+  uri
+  lwt
+  lwt.unix
+  lwt-pipe
+  bitstring
+  yojson
+  mtime
+  mtime.clock.os
+  piaf
+  websocketaf
+  websocketaf-lwt-unix
+  httpaf-lwt-unix))

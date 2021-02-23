@@ -1,0 +1,13 @@
+(tests
+ (names token_bucket)
+ (package discopotty)
+ (libraries
+  discord
+  alcotest
+  alcotest-lwt
+  lwt
+  lwt.unix
+  mtime
+  mtime.clock.os
+  qcheck-core
+  qcheck-alcotest))

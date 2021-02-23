@@ -21,9 +21,12 @@ token.txt
 *.annot
 *.cmj
 *.bak
-lib/bs
 *.mlast
 *.mliast
 .vscode
 .merlin
 .bsb.lock
+.direnv
+_esy
+*.install
+discopotty.toml

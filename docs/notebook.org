@@ -1,0 +1,126 @@
+#+TITLE: discopotty dev notebook
+
+* DOING Gateway Protocol
+
+** DONE Websocket connection handling
+** DONE Greeting/Identify protocol
+** DONE Session invalidation/reconnection handling
+Reasoning about idempotent handling of reconnections is,
+how should I put it, /*hard*/ ...
+*** DOING Find a way to actually test this
+...that doesn't involve just waiting for it
+to /(eventually)/ crash...
+
+** DONE Refactor Session
+It needs to be self-managed (to handle automatic reconnections)
+but also expose an API in order to transparently communicate with
+the Gateway. This will be needed later for "handling" gateway requests.
+
+*** DONE Simple Rate Limiting
+#+BEGIN_QUOTE
+Clients are allowed 120 events every 60 seconds, meaning you can send
+on average at a rate of up to 2 events per second. Clients who surpass
+this limit are immediately disconnected from the Gateway.
+#+END_QUOTE
+
+Don't really know what this means, but I'll stick with 2 events per second :p
+
+-------
+
+* DOING Voice connection
+** DOING Voice Gateway
+** TODO Voice UDP
+    *** TODO Test soundbite
+    I think hardcoding some bytes in the code
+    should suffice for now
+
+
+-------
+
+* DOING Error type
+Still not quite sure what the best approach is here.
+I guess time will tell, as needs come by
+/(or a good examle while looking at sources 👀)/
+
+-------
+
+* TODO Transport-level zlib compression
+
+-------
+
+* TODO Message builder
+Ideas list:
+- /GADT/
+    Later can refactor into a (G)ADT type for automatic
+    building of the other different types of message
+** DONE Custom format handler
+Using semantic tags: ~"@{<b>bold @{<i> bold_italic@} @{<i> italic@} @{<v>code@}"~
+** DONE Utils
+Just a little helper to make it easier to build
+valid stylized messages
+
+
+---------
+
+* TODO ETF encoding support
+Maybe too much work for what it's worth (~[@@deriving yojson]~ is ❤️)
+
+/Note to self: Doing ~etf->json~ is NOT the 'way'/
+
+---------
+
+* TODO Rate Limiting
+** TODO Internal tokenbucket implementation
+** TODO Sync with Discord's buckets
+As per [[https://discord.com/developers/docs/topics/rate-limits][the docs]],
+these are the headers:
+
+- *X-RateLimit-Global*
+#+BEGIN_QUOTE
+    Returned only on a HTTP 429 response if the rate limit headers returned are
+    of the global rate limit (not per-route)
+#+END_QUOTE
+
+- *X-RateLimit-Limit*
+#+BEGIN_QUOTE
+    The number of requests that can be made
+#+END_QUOTE
+
+- *X-RateLimit-Remaining*
+#+BEGIN_QUOTE
+    The number of remaining requests that can be made
+#+END_QUOTE
+
+- *X-RateLimit-Reset*
+#+BEGIN_QUOTE
+    Epoch time (seconds since 00:00:00 UTC on January 1, 1970) at which the rate
+    limit resets
+#+END_QUOTE
+
+- *X-RateLimit-Reset-After*
+#+BEGIN_QUOTE
+    Total time (in seconds) of when the current rate limit bucket will reset.
+    Can have decimals to match previous millisecond ratelimit precision
+#+END_QUOTE
+
+- *X-RateLimit-Bucket*
+#+BEGIN_QUOTE
+    A unique string denoting the rate limit being encountered
+    (non-inclusive of major parameters in the route path)
+#+END_QUOTE
+
+---------
+
+* TODO Sharding
+First should actually research how to do it in a worthwhile way
++(since we are essencially stuck in single-threaded mode for now)+
+
+[2021-2-23 Tue]/Nevermind: Sharding is useful if only to decrease
+rate limiting bottlenecks./
+
+** TODO Identify Concurrency handling
+
+---------
+
+* DONE Test framework
+Alcotest + QCheck 👍

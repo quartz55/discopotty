@@ -1,0 +1,4 @@
+(executable
+ (name discopotty)
+ (public_name discopotty)
+ (libraries discord containers toml relog.lib angstrom))
