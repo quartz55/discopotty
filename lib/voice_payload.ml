@@ -9,16 +9,66 @@ exception Invalid_payload of Raw.t * string
 
 let invalid_payload raw string = raise (Invalid_payload (raw, string))
 
+module Hello = struct
+  let t_of_yojson json =
+    Yojson.Safe.Util.(
+      json |> member "heartbeat_interval" |> to_float |> Int.of_float)
+end
+
+module Identify = struct
+  type t = {
+    server_id : Models.Snowflake.t;
+    user_id : Models.Snowflake.t;
+    session_id : string;
+    token : string;
+  }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+
+  let make ~server_id ~user_id ~session_id ~token =
+    { server_id; user_id; session_id; token }
+end
+
+module Ready = struct
+  type t = { ssrc : int; ip : string; port : int; modes : string list }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+end
+
+module SelectProtocol = struct
+  type t = { protocol : string; data : data }
+
+  and data = { address : string; port : int; mode : string }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+
+  let make ~address ~port ~mode =
+    { protocol = "udp"; data = { address; port; mode } }
+end
+
+module SessionDescription = struct
+  type t = { mode : string; secret_key : int list }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+end
+
+module Resume = struct
+  type t = {
+    server_id : Models.Snowflake.t;
+    session_id : string;
+    token : string;
+  }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+
+  let make ~server_id ~session_id ~token = { server_id; session_id; token }
+end
+
 type _ t =
-  | Identify : Dir.send t
-  | SelectProtocol : Dir.send t
-  | Ready : Dir.recv t
-  | Heartbeat : Dir.send t
-  | SessionDescription : Dir.recv t
+  | Identify : Identify.t -> Dir.send t
+  | SelectProtocol : SelectProtocol.t -> Dir.send t
+  | Ready : Ready.t -> Dir.recv t
+  | Heartbeat : int -> Dir.send t
+  | SessionDescription : SessionDescription.t -> Dir.recv t
   | Speaking : _ Dir.bidi t
-  | HeartbeatACK : Dir.recv t
-  | Resume : Dir.send t
-  | Hello : Dir.recv t
+  | HeartbeatACK : int -> Dir.recv t
+  | Resume : Resume.t -> Dir.send t
+  | Hello : int -> Dir.recv t
   | Resumed : Dir.recv t
   | ClientDisconnect : Dir.recv t
 
@@ -28,28 +78,28 @@ include Payload.Make (struct
   let op : type a. a t -> int =
    fun t ->
     match t with
-    | Identify -> 0
-    | SelectProtocol -> 1
-    | Ready -> 2
-    | Heartbeat -> 3
-    | SessionDescription -> 4
+    | Identify _ -> 0
+    | SelectProtocol _ -> 1
+    | Ready _ -> 2
+    | Heartbeat _ -> 3
+    | SessionDescription _ -> 4
     | Speaking -> 5
-    | HeartbeatACK -> 6
-    | Resume -> 7
-    | Hello -> 8
+    | HeartbeatACK _ -> 6
+    | Resume _ -> 7
+    | Hello _ -> 8
     | Resumed -> 9
     | ClientDisconnect -> 13
 
   let of_raw raw =
     match (raw.Raw.op, raw.d) with
-    | 2, Some _d -> Ready
-    | 3, Some _d -> SessionDescription
+    | 2, Some d -> Ready (Ready.t_of_yojson d)
+    | 4, Some d -> SessionDescription (SessionDescription.t_of_yojson d)
     | 5, Some _d -> Speaking
-    | 6, Some _d -> HeartbeatACK
-    | 8, Some _d -> Hello
-    | 9, Some _d -> Resumed
+    | 6, Some d -> HeartbeatACK ([%of_yojson: int] d)
+    | 8, Some d -> Hello (Hello.t_of_yojson d)
+    | 9, _ -> Resumed
     | 13, Some _d -> ClientDisconnect
-    | n, _ when n <= 11 ->
+    | n, _ when n <= 13 ->
         invalid_payload raw
           (Format.asprintf "payload with opcode=%d is not recv type" n)
     | _ -> invalid_payload raw "unrecognized opcode"
@@ -58,9 +108,20 @@ include Payload.Make (struct
     op t
     |>
     match t with
-    | Identify -> Raw.make ()
-    | SelectProtocol -> Raw.make ()
-    | Heartbeat -> Raw.make ()
+    | Identify id -> Raw.make ~d:(Identify.yojson_of_t id) ()
+    | SelectProtocol sp -> Raw.make ~d:(SelectProtocol.yojson_of_t sp) ()
+    | Heartbeat nonce -> Raw.make ~d:(`Int nonce) ()
     | Speaking -> Raw.make ()
-    | Resume -> Raw.make ()
+    | Resume d -> Raw.make ~d:(Resume.yojson_of_t d) ()
 end)
+
+let heartbeat nonce = Heartbeat nonce
+
+let make_identify ~server_id ~user_id ~session_id ~token =
+  Identify (Identify.make ~server_id ~user_id ~session_id ~token)
+
+let make_select_protocol ~address ~port ~mode =
+  SelectProtocol (SelectProtocol.make ~address ~port ~mode)
+
+let make_resume ~server_id ~session_id ~token =
+  Resume (Resume.make ~server_id ~session_id ~token)

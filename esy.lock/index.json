@@ -1,5 +1,5 @@
 {
-  "checksum": "5effcdd677f01caffda722076574417e",
+  "checksum": "b94198273f0aa9836a73d32e77ea3dcd",
   "root": "discopotty@link-dev:./package.json",
   "node": {
     "yarn-pkg-config@github:esy-ocaml/yarn-pkg-config#db3a0b63883606dd57c54a7158d560d6cba8cd79@d41d8cd9": {
@@ -129,6 +129,7 @@
         "@opam/containers-data@opam:3.2@2a99f808",
         "@opam/containers@opam:3.2@c4e3f662",
         "@opam/bitstring@opam:4.1.0@5a3ee0e8",
+        "@opam/angstrom-lwt-unix@opam:0.15.0@2ffc8053",
         "@opam/angstrom@opam:0.15.0@48ede9cb"
       ],
       "devDependencies": [
@@ -2897,6 +2898,37 @@
         "@esy-ocaml/substs@0.0.1@d41d8cd9"
       ],
       "devDependencies": [ "ocaml@4.11.1000@d41d8cd9" ]
+    },
+    "@opam/angstrom-lwt-unix@opam:0.15.0@2ffc8053": {
+      "id": "@opam/angstrom-lwt-unix@opam:0.15.0@2ffc8053",
+      "name": "@opam/angstrom-lwt-unix",
+      "version": "opam:0.15.0",
+      "source": {
+        "type": "install",
+        "source": [
+          "archive:https://opam.ocaml.org/cache/md5/51/5104768c404ea92fd0a53a5b0f75cd50#md5:5104768c404ea92fd0a53a5b0f75cd50",
+          "archive:https://github.com/inhabitedtype/angstrom/archive/0.15.0.tar.gz#md5:5104768c404ea92fd0a53a5b0f75cd50"
+        ],
+        "opam": {
+          "name": "angstrom-lwt-unix",
+          "version": "0.15.0",
+          "path": "esy.lock/opam/angstrom-lwt-unix.0.15.0"
+        }
+      },
+      "overrides": [],
+      "dependencies": [
+        "ocaml@4.11.1000@d41d8cd9", "@opam/lwt@opam:5.4.0@1ec6dbfd",
+        "@opam/dune@opam:2.8.2@3d714e5f",
+        "@opam/base-unix@opam:base@87d0b2eb",
+        "@opam/angstrom@opam:0.15.0@48ede9cb",
+        "@esy-ocaml/substs@0.0.1@d41d8cd9"
+      ],
+      "devDependencies": [
+        "ocaml@4.11.1000@d41d8cd9", "@opam/lwt@opam:5.4.0@1ec6dbfd",
+        "@opam/dune@opam:2.8.2@3d714e5f",
+        "@opam/base-unix@opam:base@87d0b2eb",
+        "@opam/angstrom@opam:0.15.0@48ede9cb"
+      ]
     },
     "@opam/angstrom@opam:0.15.0@48ede9cb": {
       "id": "@opam/angstrom@opam:0.15.0@48ede9cb",

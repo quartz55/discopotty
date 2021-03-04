@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@opam/angstrom": "0.15.0",
+    "@opam/angstrom-lwt-unix": "0.15.0",
     "@opam/bitstring": "4.1.0",
     "@opam/containers": "3.2",
     "@opam/containers-data": "3.2",

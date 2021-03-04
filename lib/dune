@@ -13,6 +13,8 @@
   lwt.unix
   lwt-pipe
   bitstring
+  angstrom
+  angstrom-lwt-unix
   yojson
   mtime
   mtime.clock.os

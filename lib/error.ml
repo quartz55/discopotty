@@ -8,3 +8,5 @@ let to_string = function
   | `Http piaf -> Piaf.Error.to_string piaf
   | `Exn exn -> Printexc.to_string exn
   | `Msg m -> m
+
+let catch_lwt p = Lwt_result.(catch p |> map_err (fun exn -> `Exn exn))

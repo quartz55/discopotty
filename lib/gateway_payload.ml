@@ -147,6 +147,36 @@ module VoiceState = struct
     { guild_id; channel_id; self_mute; self_deaf }
 end
 
+module GuildRequestMembers = struct
+  type t = {
+    guild_id : Models.Snowflake.t;
+    query : string option; [@yojson.option]
+    limit : int;
+    presences : bool option; [@yojson.option]
+    user_ids : Models.Snowflake.t list option; [@yojson.option]
+    nonce : string option; [@yojson.option]
+  }
+  [@@deriving yojson, show]
+
+  type q =
+    [ `All
+    | `User of Models.Snowflake.t
+    | `Users of Models.Snowflake.t list
+    | `Query of string
+    | `QueryLimit of string * int ]
+
+  let make ?presences ?nonce ~q guild_id =
+    let query, limit, user_ids =
+      match q with
+      | `All -> (Some "", 0, None)
+      | `User id -> (None, 0, Some [ id ])
+      | `Users users -> (None, 0, Some users)
+      | `QueryLimit (q, l) -> (Some q, l, None)
+      | `Query q -> (Some q, 0, None)
+    in
+    { guild_id; query; limit; presences; user_ids; nonce }
+end
+
 module Dir = Payload.Dir
 module Raw = Payload.Raw
 
@@ -162,7 +192,7 @@ type _ t =
   | VoiceStateUpdate : VoiceState.t -> Dir.send t
   | Resume : Resume.t -> Dir.send t
   | Reconnect : Dir.recv t
-  | RequestGuildMembers : Dir.send t
+  | RequestGuildMembers : GuildRequestMembers.t -> Dir.send t
   | InvalidSession : bool -> Dir.recv t
   | Hello : int -> Dir.recv t
   | HeartbeatACK : Dir.recv t
@@ -180,7 +210,7 @@ include Payload.Make (struct
     | VoiceStateUpdate _ -> 4
     | Resume _ -> 6
     | Reconnect -> 7
-    | RequestGuildMembers -> 8
+    | RequestGuildMembers _ -> 8
     | InvalidSession _ -> 9
     | Hello _ -> 10
     | HeartbeatACK -> 11
@@ -191,7 +221,7 @@ include Payload.Make (struct
     | 0, d ->
         let s, t =
           match (raw.s, raw.t) with
-          | Some s, Some t -> (s, t)
+          | Some (Some s), Some (Some t) -> (s, t)
           | _ -> invalid_payload raw "Dispatch missing 's' and/or 't'"
         in
         Dispatch (s, Events.of_name t d)
@@ -225,7 +255,8 @@ include Payload.Make (struct
     | PresenceUpdate d -> Raw.make ~d:(Presence.yojson_of_t d) ()
     | VoiceStateUpdate d -> Raw.make ~d:(VoiceState.yojson_of_t d) ()
     | Resume d -> Raw.make ~d:(Resume.yojson_of_t d) ()
-    | RequestGuildMembers -> Raw.make ()
+    | RequestGuildMembers d ->
+        Raw.make ~d:(GuildRequestMembers.yojson_of_t d) ()
 end)
 
 let heartbeat : _ t = Heartbeat
@@ -243,3 +274,6 @@ let make_voice_state_update ?channel_id ~self_mute ~self_deaf guild_id =
   VoiceStateUpdate (VoiceState.make ?channel_id ~self_mute ~self_deaf guild_id)
 
 let make_resume ~token ~session_id ~seq = Resume { token; session_id; seq }
+
+let make_request_guild_members ?presences ?nonce ~q guild_id =
+  RequestGuildMembers (GuildRequestMembers.make ?presences ?nonce ~q guild_id)

@@ -81,7 +81,7 @@ let take ?(n = 1) t =
   check_capacity ~n t;
   let n_ns = Int64.(of_int n * t.ns_per_token) in
   let enqueue' () =
-    let p, u = Lwt.wait () in
+    let p, u = Lwt.task () in
     CCDeque.push_back t.waiters (Waiter (n_ns, u));
     p
   in
@@ -97,3 +97,13 @@ let take ?(n = 1) t =
 let take_then ~f ?n t = take ?n t |> Lwt.map (fun () -> f ())
 
 let wrap_take ~f t ?(n = 1) () = Lwt.bind (take ~n t) (fun () -> f)
+
+let cancel_waiting t =
+  let rec f' () =
+    match CCDeque.take_front_opt t.waiters with
+    | Some (Waiter (_, u)) ->
+        Lwt.wakeup_later_exn u Lwt.Canceled;
+        f' ()
+    | None -> ()
+  in
+  f' ()

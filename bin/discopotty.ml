@@ -69,11 +69,12 @@ let handler cfg client =
   let prefix = Config.prefix cfg in
   Sys.set_signal Sys.sigint
     (Sys.Signal_handle (fun _ -> D.Client.disconnect client));
+  let open Lwt.Syntax in
   function
-  | D.Events.MessageCreate { content; channel_id; _ } -> (
+  | D.Events.MessageCreate { content; channel_id; guild_id; _ } -> (
       L.warn (fun m -> m "MESSAGE: %s" content);
       match Cmd.of_message ~prefix content with
-      | None -> ()
+      | None -> Lwt.return ()
       | Some ("ping", args) ->
           let msg = Format.asprintf "**pong** %s" args in
           D.Client.send_message channel_id msg client
@@ -81,14 +82,32 @@ let handler cfg client =
           let msg =
             Msg.fmt "⚠️ @{<b>@{<i>disconnecting by user request...@}@} 👋"
           in
-          D.Client.send_message channel_id msg client;
+          let+ () = D.Client.send_message channel_id msg client in
           D.Client.disconnect client
+      | Some ("join", "") ->
+          let msg =
+            Msg.fmt
+              "⚠️ Not supported yet, please provide a voice channel id"
+          in
+          D.Client.send_message channel_id msg client
+      | Some ("join", v_channel_id) ->
+          let guild_id = Option.get_exn guild_id in
+          let v_channel_id = M.Snowflake.of_string v_channel_id in
+          Lwt.catch
+            (fun () ->
+              D.Client.join_voice ~guild_id ~channel_id:v_channel_id client)
+            (fun e ->
+              let msg =
+                Msg.fmt "⚠️ Couldn't join voice channel '%Ld': %s"
+                  v_channel_id (Printexc.to_string e)
+              in
+              D.Client.send_message channel_id msg client)
       | Some (other, _) ->
           let msg =
             Msg.fmt "🛑 @{<b>unsupported command@} @{<code>%s@}" other
           in
           D.Client.send_message channel_id msg client)
-  | _ -> ()
+  | _ -> Lwt.return ()
 
 let () =
   let inner () =

@@ -7,7 +7,12 @@ module Raw = struct
 
   let json_of_yojson : json -> json = Obj.magic
 
-  type t = { op : int; d : json option; s : int option; t : string option }
+  type t = {
+    op : int;
+    d : json option;
+    s : int option option; [@yojson.option]
+    t : string option option; [@yojson.option]
+  }
   [@@deriving yojson]
 
   let make ?d ?s ?t () op = { op; d; s; t }

@@ -1,4 +1,4 @@
-open Containers
+open Globals
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -6,16 +6,44 @@ module F = Relog.Field
 module Ws_Conn = Websocket.Make (Gateway_payload)
 module Pl = Gateway_payload
 
+module Ws = struct
+  type t = t' ref
+
+  and t' = Open of Token_bucket.t * Ws_Conn.t | Closed
+
+  let create conn = ref (Open (Token_bucket.make ~capacity:1 2., conn))
+
+  let send t pl =
+    match !t with
+    | Open (tb, conn) ->
+        Lwt.async (fun () ->
+            Token_bucket.take tb |> Lwt.map (fun () -> Ws_Conn.send conn pl));
+        true
+    | Closed -> false
+
+  let send_exn t pl =
+    if not (send t pl) then failwith "cannot send payload to closed ws"
+
+  let close ~code t =
+    match !t with
+    | Open (tb, conn) ->
+        Token_bucket.cancel_waiting tb;
+        Ws_Conn.close ~code conn
+    | Closed -> ()
+end
+
 type t = {
   mutable state : state;
-  mutable ws : Ws_Conn.t;
+  mutable ws : Ws.t;
   mutable disconnect : unit -> unit;
   ev_pipe : (Events.t, [ `r | `w ]) Lwt_pipe.t;
+  ev_stream : Events.t Lwt_pipe.Reader.t;
+  writer : Pl.send Lwt_pipe.Writer.t;
 }
 
 and state =
-  | Greeting of conn
-  | Identifying of hb
+  | Greet of conn
+  | Id of hb
   | Resuming of session_info * hb
   | Connected of session_info * hb
 
@@ -82,26 +110,27 @@ let session_logger : t -> (module Relog.Logger.S) =
           lazy_int "seq" (fun () ->
               match t.state with
               | Connected ({ seq; _ }, _)
-              | Greeting (Reconnection { seq; _ })
+              | Greet (Reconnection { seq; _ })
               | Resuming ({ seq; _ }, _) ->
                   seq
               | _ -> -1);
           lazy_str "session_id" (fun () ->
               match t.state with
               | Connected ({ id; _ }, _)
-              | Greeting (Reconnection { id; _ })
+              | Greet (Reconnection { id; _ })
               | Resuming ({ id; _ }, _) ->
                   id
               | _ -> "<not connected>");
           lazy_bool "reconn" (fun () ->
               match t.state with
-              | Resuming _ | Greeting (Reconnection _) -> true
+              | Resuming _ | Greet (Reconnection _) -> true
               | _ -> false);
         ]
     (module L)
 
 let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
-    ~send_payload ~on_ready ~token state pl =
+    ~send_payload ~(on_ready : ?user:Models.User.t -> unit -> unit) ~token state
+    pl =
   let module L = (val session_logger) in
   let make_hb interval =
     make_heartbeat
@@ -112,67 +141,67 @@ let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
       interval
   in
   match (state, pl) with
-  | Greeting Fresh, Pl.Hello hb ->
+  | Greet Fresh, Pl.Hello hb ->
       let id = Pl.Identify.make token in
       L.info (fun m ->
           m "got greeting, identifying (intents=%a)" Pl.Intents.pp id.intents);
       send_payload (Pl.Identify id);
       let hb_secs = Float.of_int hb /. 1_000. in
       let hb = make_hb hb_secs in
-      `Update (Identifying hb)
-  | Greeting (Reconnection ({ id; seq; _ } as info)), Hello hb ->
+      `Update (Id hb)
+  | Greet (Reconnection ({ id; seq; _ } as info)), Hello hb ->
       L.info (fun m ->
           m "got greeting, resuming session '%s' with seq=%d" id seq);
       send_payload (Pl.make_resume ~token ~session_id:id ~seq);
       let hb_secs = Float.of_int hb /. 1_000. in
       let hb = make_hb hb_secs in
       `Update (Resuming (info, hb))
-  | Greeting _conn, InvalidSession _ ->
+  | Greet _conn, InvalidSession _ ->
       L.warn (fun m -> m "invalid session during initial greeting");
       `Invalidated
-  | Greeting _, Heartbeat ->
+  | Greet _, Heartbeat ->
       L.warn (fun m -> m "got hearbeat request during greeting, ignoring...");
       `NoUpdate
-  | Greeting _, HeartbeatACK ->
+  | Greet _, HeartbeatACK ->
       L.warn (fun m -> m "got hearbeat ack during handshake, ignoring...");
       `NoUpdate
-  | Greeting Fresh, Reconnect ->
+  | Greet Fresh, Reconnect ->
       L.warn (fun m ->
           m "got reconnection request during greeting, obliging...");
       `Retry
-  | Greeting (Reconnection info), Reconnect ->
+  | Greet (Reconnection info), Reconnect ->
       L.warn (fun m ->
           m "got reconnection request during reconnection greeting, obliging...");
       `RetryWith info
-  | Identifying hb, Dispatch (seq, Events.Ready info) ->
+  | Id hb, Dispatch (seq, Events.Ready info) ->
       let s_id = info.session_id in
       L.info (fun m ->
           m "session is ready"
             ~fields:F.[ int "version" info.v; str "id" s_id; int "seq" seq ]);
-      on_ready ();
+      on_ready ~user:info.user ();
       `Update (Connected ({ id = s_id; seq }, hb))
-  | (Identifying hb | Resuming (_, hb) | Connected (_, hb)), Hello new_hb ->
-      L.warn (fun m -> m "got new greeting, updating heartbeat_interval");
+  | (Id hb | Resuming (_, hb) | Connected (_, hb)), Hello new_hb ->
+      L.warn (fun m -> m "got new greeting, updating heartbeat");
       let hb_secs = Float.of_int new_hb /. 1_000. in
       hb.preempt ~interval:hb_secs ();
       `NoUpdate
-  | Identifying hb, InvalidSession _ ->
+  | Id hb, InvalidSession _ ->
       L.err (fun m -> m "session was invalidated while identifying");
       hb.cancel ();
       `Invalidated
-  | Identifying hb, Reconnect ->
+  | Id hb, Reconnect ->
       L.warn (fun m -> m "got reconnection request while identifying");
       hb.cancel ();
       `Retry
-  | (Greeting _ | Identifying _), Dispatch _ ->
+  | (Greet _ | Id _), Dispatch _ ->
       L.warn (fun m ->
           m "received dispatch during initial handshake, ignoring...");
       `NoUpdate
-  | (Identifying hb | Resuming (_, hb) | Connected (_, hb)), Heartbeat ->
+  | (Id hb | Resuming (_, hb) | Connected (_, hb)), Heartbeat ->
       L.info (fun m -> m "requested heartbeat, obliging...");
       hb.preempt ();
       `NoUpdate
-  | (Identifying hb | Resuming (_, hb) | Connected (_, hb)), HeartbeatACK ->
+  | (Id hb | Resuming (_, hb) | Connected (_, hb)), HeartbeatACK ->
       L.debug (fun m -> m "got hearbeat ack");
       hb.ack ();
       `NoUpdate
@@ -185,7 +214,7 @@ let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
       Lwt.async (fun () ->
           Lwt_unix.sleep 3.4
           |> Lwt.map (fun () -> send_payload (Pl.Identify id)));
-      `Update (Identifying hb)
+      `Update (Id hb)
   | Resuming (info, hb), Reconnect ->
       hb.cancel ();
       `RetryWith info
@@ -224,42 +253,44 @@ let create ?(zlib = false) ?(version = Versions.Gateway.V8) token uri =
   let uri = uri |> with_ws_params ~zlib ~version ~enc:`json in
 
   let p_init, u_init = Lwt.wait () in
+  let send_pipe = Lwt_pipe.create () in
   let rec manager ?t () =
     let p_connected, u_connected = Lwt.wait () in
     let p_closed, u_closed = Lwt.wait () in
     let ws_conn_handler : Ws_Conn.handler =
      fun ws ->
-      let disconnect () =
-        Lwt.wakeup_later u_closed `Disconnect;
-        Ws_Conn.close ~code:`Going_away ws
-      in
+      let ws = Ws.create ws in
+      let disconnect () = Lwt.wakeup_later u_closed `Disconnect in
       let t =
         match t with
         | Some t ->
+            Ws.close ~code:`Normal_closure t.ws;
             t.ws <- ws;
+            t.disconnect <- disconnect;
             t
         | None ->
+            let p = Lwt_pipe.create ~max_size:10 () in
             {
-              state = Greeting Fresh;
+              state = Greet Fresh;
               ws;
-              ev_pipe = Lwt_pipe.create ~max_size:10 ();
+              ev_pipe = p;
+              ev_stream = p;
               disconnect;
+              writer = send_pipe;
             }
       in
       let module L = (val session_logger t) in
-      let forward_event ev =
-        Lwt.async (fun () ->
-            Lwt_pipe.write_exn t.ev_pipe ev
-            |> Lwt.map (fun () -> L.debug (fun m -> m "wrote to events pipe")))
+      let send_payload = Ws.send_exn t.ws in
+      let forward_event = function
+        | Events.Unsupported (n, _) ->
+            L.warn (fun m -> m "unsupported event: %s" n)
+        | ev ->
+            Lwt.async (fun () ->
+                Lwt_pipe.write_exn t.ev_pipe ev
+                |> Lwt.map (fun () ->
+                       L.debug (fun m -> m "wrote to events pipe")))
       in
-      let send_payload =
-        let bucket = Token_bucket.make ~capacity:1 2. in
-        fun pl ->
-          Lwt.async (fun () ->
-              Token_bucket.take bucket
-              |> Lwt.map (fun () -> Ws_Conn.send t.ws pl))
-      in
-      let on_ready () = Lwt.wakeup_later u_connected (Ok t) in
+      let on_ready ?user () = Lwt.wakeup_later u_connected (Ok (t, user)) in
       let invalidated = ref false in
       let handle_payload =
         let f' =
@@ -272,10 +303,10 @@ let create ?(zlib = false) ?(version = Versions.Gateway.V8) token uri =
           | `NoUpdate -> ()
           | `Update st -> t.state <- st
           | `Retry ->
-              Ws_Conn.close ~code:`Normal_closure t.ws;
+              Ws.close ~code:`Normal_closure t.ws;
               Lwt.wakeup_later u_closed (`Retry None)
           | `RetryWith info ->
-              Ws_Conn.close ~code:`Abnormal_closure t.ws;
+              Ws.close ~code:`Abnormal_closure t.ws;
               Lwt.wakeup_later u_closed (`Retry (Some info))
           | `Invalidated -> invalidated := true
       in
@@ -296,26 +327,61 @@ let create ?(zlib = false) ?(version = Versions.Gateway.V8) token uri =
             Lwt.wakeup_later u_closed reason
     in
     let* () = Ws_Conn.create ~zlib ~handler:ws_conn_handler uri in
-    let* t = p_connected in
-    if Lwt.is_sleeping p_init then Lwt.wakeup_later u_init (Ok t);
-    let* reason = p_closed |> Lwt_result.ok in
-    match reason with
-    | `Retry None ->
-        t.state <- Greeting Fresh;
-        manager ~t ()
-    | `Retry (Some info) ->
-        t.state <- Greeting (Reconnection info);
-        manager ~t ()
-    | `Disconnect -> Lwt_result.return ()
-    | `Invalid msg -> Lwt_result.fail (`Discord msg)
+    let* t, user = p_connected in
+    let () =
+      match user with
+      | Some user when Lwt.is_sleeping p_init ->
+          Lwt.wakeup_later u_init (Ok (t, user))
+      | _ -> ()
+    in
+    let rec manage' () =
+      let open Lwt.Syntax in
+      let forward_pl =
+        Lwt_pipe.read send_pipe
+        |> Lwt.map (function
+             | Some pl -> `Forward_payload pl
+             | None -> failwith "!BUG! send_pipe should never have been closed")
+      in
+      let* reason = Lwt.pick [ forward_pl; p_closed ] in
+      match reason with
+      | `Forward_payload pl ->
+          let* () = Lwt.wrap (fun () -> Ws.send_exn t.ws pl) in
+          manage' ()
+      | `Retry None ->
+          t.state <- Greet Fresh;
+          manager ~t ()
+      | `Retry (Some info) ->
+          t.state <- Greet (Reconnection info);
+          manager ~t ()
+      | `Disconnect ->
+          Ws.close ~code:`Going_away t.ws;
+          let* () = Lwt_pipe.close t.ev_pipe in
+          Lwt_result.return ()
+      | `Invalid msg -> Lwt_result.fail (`Discord msg)
+    in
+    manage' ()
   in
   Lwt.async (fun () ->
       manager ()
       |> Lwt.map (function
            | Ok () -> ()
+           | Error _ as err when Lwt.is_sleeping p_init ->
+               Lwt.wakeup_later u_init err
            | Error e -> failwith (Error.to_string e)));
   p_init
 
-let events { ev_pipe; _ } = ev_pipe
+let events { ev_stream; _ } = ev_stream
+
+let _send_exn { writer; _ } pl = Lwt_pipe.write_exn writer pl
+
+let send_presence_update t ?since ~afk status =
+  _send_exn t (Pl.make_presence_update ?since ~afk status)
+
+let send_voice_state_update t ?channel_id ~self_mute ~self_deaf guild_id =
+  _send_exn t
+    (Pl.make_voice_state_update ?channel_id ~self_mute ~self_deaf guild_id)
+
+let send_guild_request_members t ?presences ?nonce ~q guild_id =
+  _send_exn t (Pl.make_request_guild_members ?presences ?nonce ~q guild_id)
 
 let disconnect { disconnect; _ } = disconnect ()
