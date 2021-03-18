@@ -239,7 +239,7 @@ functor
           let rec send' n =
             match len - n with
             | len when len > max_payload_len ->
-                Websocketaf.Wsd.send_bytes wsd ~kind:`Text out ~off:n
+                Websocketaf.Wsd.send_bytes wsd ~kind:`Continuation out ~off:n
                   ~len:max_payload_len;
                 send' (n + max_payload_len)
             | len -> Websocketaf.Wsd.send_bytes wsd ~kind:`Text out ~off:n ~len
@@ -296,13 +296,16 @@ functor
               ()
           | `Continuation ->
               L.err (fun m -> m "continuation frame unsupported");
-              assert false
+              exit (-1)
           | `Ping -> L.warn (fun m -> m "got PING frame, ignoring... (?)")
           | `Pong -> L.warn (fun m -> m "got PONG frame, ignoring... (?)")
           | `Other _ ->
               L.warn (fun m -> m "got non standard code frame, ignoring...")
         in
-        let eof () = L.err (fun m -> m "websocket received EOF") in
+        let eof () =
+          L.err (fun m -> m "!!!FATAL!!! websocket received EOF");
+          exit (-1)
+        in
         { Websocketaf.Client_connection.frame; eof }
       in
       let do_handshake =

@@ -1,0 +1,12 @@
+{
+  "source": "github:dsheets/ocaml-sodium:opam#1f064fa90cd02c44e2dcc0708d4ba3a256a9c1f2",
+  "override": {
+    "build": [
+      ["make", "CFLAGS=\"-I$SODIUM_INCLUDE_PATH -L$SODIUM_LIB_PATH\"", "-j4"]
+    ],
+    "install": "make PREFIX=$cur__install install",
+    "dependencies": {
+      "@opam/conf-libsodium": "*"
+    }
+  }
+}

@@ -27,13 +27,11 @@ Don't really know what this means, but I'll stick with 2 events per second :p
 
 -------
 
-* DOING Voice Connection
-** DOING Voice Gateway Protocol
+* DONE Voice Connection
+** DONE Voice Gateway Protocol
 *** DONE IP Discovery
-** DOING Voice UDP
-    *** TODO Test soundbite
-    I think hardcoding some bytes in the code
-    should suffice for now
+** DONE Voice UDP
+    *** DONE Test soundbite
 
 
 -------
@@ -76,7 +74,7 @@ Maybe too much work for what it's worth (~[@@deriving yojson]~ is ❤️)
 ---------
 
 * TODO Rate Limiting
-** TODO Internal tokenbucket implementation
+** DONE Internal tokenbucket implementation
 ** TODO Sync with Discord's buckets
 As per [[https://discord.com/developers/docs/topics/rate-limits][the docs]],
 these are the headers:

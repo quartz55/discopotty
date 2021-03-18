@@ -11,7 +11,7 @@ module Ws = struct
 
   and t' = Open of Token_bucket.t * Ws_Conn.t | Closed
 
-  let create conn = ref (Open (Token_bucket.make ~capacity:1 2., conn))
+  let create conn = ref (Open (Token_bucket.make ~capacity:2 1., conn))
 
   let send t pl =
     match !t with
@@ -75,10 +75,13 @@ let make_heartbeat ?err fn interval =
     let p_preempt, u_preempt = Lwt.wait () in
     let p_sleep = Lwt_unix.sleep out.interval |> Lwt.map (Fun.const `Sleep) in
     out.ack <- (fun () -> acked := true);
-    out.cancel <- (fun () -> Lwt.wakeup_later u_preempt `Cancel);
+    out.cancel <-
+      (fun () ->
+        if Lwt.is_sleeping p_preempt then Lwt.wakeup_later u_preempt `Cancel);
     out.preempt <-
       (fun ?(interval = interval) () ->
-        Lwt.wakeup_later u_preempt (`Preempt interval));
+        if Lwt.is_sleeping p_preempt then
+          Lwt.wakeup_later u_preempt (`Preempt interval));
     let* r = Lwt.pick [ p_sleep; p_preempt ] in
     match (r, !acked) with
     | `Sleep, true -> loop ()
@@ -92,6 +95,10 @@ let make_heartbeat ?err fn interval =
   in
   Lwt.async loop;
   out
+
+let cancel_hb = function
+  | Id hb | Resuming (_, hb) | Connected (_, hb) -> hb.cancel ()
+  | _ -> ()
 
 let with_ws_params ?(zlib = false) ~enc ~version uri =
   (* let enc = match enc with `json -> "json" | `etf -> "etf" in *)
@@ -185,13 +192,11 @@ let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
       let hb_secs = Float.of_int new_hb /. 1_000. in
       hb.preempt ~interval:hb_secs ();
       `NoUpdate
-  | Id hb, InvalidSession _ ->
+  | Id _hb, InvalidSession _ ->
       L.err (fun m -> m "session was invalidated while identifying");
-      hb.cancel ();
       `Invalidated
-  | Id hb, Reconnect ->
+  | Id _hb, Reconnect ->
       L.warn (fun m -> m "got reconnection request while identifying");
-      hb.cancel ();
       `Retry
   | (Greet _ | Id _), Dispatch _ ->
       L.warn (fun m ->
@@ -215,9 +220,7 @@ let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
           Lwt_unix.sleep 3.4
           |> Lwt.map (fun () -> send_payload (Pl.Identify id)));
       `Update (Id hb)
-  | Resuming (info, hb), Reconnect ->
-      hb.cancel ();
-      `RetryWith info
+  | Resuming (info, _hb), Reconnect -> `RetryWith info
   | Resuming (({ id; _ } as i), hb), Dispatch (e_seq, Resumed) ->
       on_ready ();
       L.info (fun m -> m "successfully resumed session '%s'" id);
@@ -228,15 +231,13 @@ let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
             ~fields:F.[ int "seq" seq; int "event_seq" e_seq ]);
       forward_event e;
       `Update (Connected ({ i with seq = e_seq }, hb))
-  | Connected (({ id; seq; _ } as info), hb), Reconnect ->
+  | Connected (({ id; seq; _ } as info), _hb), Reconnect ->
       L.warn (fun m ->
           m "got reconnection request" ~fields:F.[ str "id" id; int "seq" seq ]);
-      hb.cancel ();
       `RetryWith info
-  | Connected (({ seq; id; _ } as info), hb), InvalidSession resume ->
+  | Connected (({ seq; id; _ } as info), _hb), InvalidSession resume ->
       L.warn (fun m ->
           m "session invalidated" ~fields:F.[ bool "resumable" resume ]);
-      hb.cancel ();
       if resume then (
         L.info (fun m -> m "will try to resume session '%s' on seq=%d" id seq);
         `RetryWith info)
@@ -320,7 +321,7 @@ let create ?(zlib = false) ?(version = Versions.Gateway.V8) token uri =
             let reason =
               (* Make (or extend) type for Discord error codes *)
               match code with
-              | `Other 4000 | `Other 4007 | `Other 4009 -> `Retry None
+              | `Normal_closure | `Other 4006 | `Other 4007 -> `Retry None
               | `Other 4004 -> `Invalid "invalid token"
               | _ -> `Invalid "unknown"
             in
@@ -348,16 +349,21 @@ let create ?(zlib = false) ?(version = Versions.Gateway.V8) token uri =
           let* () = Lwt.wrap (fun () -> Ws.send_exn t.ws pl) in
           manage' ()
       | `Retry None ->
+          cancel_hb t.state;
           t.state <- Greet Fresh;
           manager ~t ()
       | `Retry (Some info) ->
+          cancel_hb t.state;
           t.state <- Greet (Reconnection info);
           manager ~t ()
       | `Disconnect ->
+          cancel_hb t.state;
           Ws.close ~code:`Going_away t.ws;
           let* () = Lwt_pipe.close t.ev_pipe in
           Lwt_result.return ()
-      | `Invalid msg -> Lwt_result.fail (`Discord msg)
+      | `Invalid msg ->
+          cancel_hb t.state;
+          Lwt_result.fail (`Discord msg)
     in
     manage' ()
   in

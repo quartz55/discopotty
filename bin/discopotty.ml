@@ -93,21 +93,29 @@ let handler cfg client =
       | Some ("join", v_channel_id) ->
           let guild_id = Option.get_exn guild_id in
           let v_channel_id = M.Snowflake.of_string v_channel_id in
-          Lwt.catch
-            (fun () ->
-              D.Client.join_voice ~guild_id ~channel_id:v_channel_id client)
-            (fun e ->
-              let msg =
-                Msg.fmt "⚠️ Couldn't join voice channel '%Ld': %s"
-                  v_channel_id (Printexc.to_string e)
-              in
-              D.Client.send_message channel_id msg client)
+          D.Client.join_voice ~guild_id ~channel_id:v_channel_id client
+      | Some ("play", "kiff") -> (
+          let guild_id = Option.get_exn guild_id in
+          let* s = D.Audio_stream.Ffmpeg.of_file "./kiff.mp3" in
+          match s with
+          | Ok audio_stream ->
+              D.Client.play_audio_stream ~guild_id audio_stream client
+          | _ -> Lwt.return_unit)
+      | Some ("play", "soundbite") -> (
+          let guild_id = Option.get_exn guild_id in
+          let* s = D.Audio_stream.Ffmpeg.of_file "./bite2.mp3" in
+          match s with
+          | Ok audio_stream ->
+              D.Client.play_audio_stream ~guild_id audio_stream client
+          | _ -> Lwt.return_unit)
       | Some (other, _) ->
           let msg =
             Msg.fmt "🛑 @{<b>unsupported command@} @{<code>%s@}" other
           in
           D.Client.send_message channel_id msg client)
-  | _ -> Lwt.return ()
+  | _ ->
+      L.debug (fun m -> m "don't care");
+      Lwt.return ()
 
 let () =
   let inner () =

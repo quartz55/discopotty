@@ -3,11 +3,13 @@ open Globals
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 module Payload = Gateway_payload
+module SfMap = Map.Make (Models.Snowflake)
 
 type t = {
   session : Session.t;
-  events : Events.t Lwt_pipe.Reader.t;
+  mutable events : Events.t Lwt_stream.t;
   user : Models.User.t;
+  mutable voice_sessions : (snowflake * Voice.t) SfMap.t;
 }
 
 let get_gateway_url http =
@@ -38,75 +40,107 @@ let connect ?http token =
   in
   let* url = get_gateway_url http in
   let+ session, user = Session.create token (Uri.of_string url) in
-  let rec t = { session; events; user } and events = Session.events session in
+  let rec t = { session; events; user; voice_sessions }
+  and events = Session.events session |> Lwt_pipe.to_stream
+  and voice_sessions = SfMap.empty in
   t
 
 let disconnect { session; _ } = Session.disconnect session
 
 let user { user; _ } = user
 
-let events { events; _ } = events
+let events { events; _ } = events |> Lwt_pipe.of_stream
 
-let join_voice ~guild_id ~channel_id { session; user; _ } =
+let _fork_events t = Lwt_stream.clone t.events |> Lwt_pipe.of_stream
+
+let leave_voice ~guild_id ({ session; voice_sessions; _ } as t) =
+  let open Lwt.Infix in
+  match SfMap.get guild_id voice_sessions with
+  | Some (_, vs) ->
+      Voice.disconnect vs >>= fun () ->
+      t.voice_sessions <- SfMap.remove guild_id voice_sessions;
+      Session.send_voice_state_update session ~self_mute:true ~self_deaf:true
+        guild_id
+  | None -> Lwt.return_unit
+
+let join_voice ~guild_id ~channel_id ({ session; user; _ } as t) =
   let open Lwt.Syntax in
-  let* () =
-    Session.send_voice_state_update session ~channel_id ~self_deaf:false
-      ~self_mute:false guild_id
-  in
-  let is_own_vs
-      { Events.VoiceState.guild_id = guild; channel_id = chan; user_id; _ } =
-    match (guild, chan) with
-    | Some g, Some c ->
-        Models.Snowflake.(guild_id = g && channel_id = c && user_id = user.id)
-    | _ -> false
-  in
-  let is_own_srv { Events.VoiceServerUpdate.guild_id = guild; _ } =
-    Models.Snowflake.(guild_id = guild)
-  in
-
-  let wait_for_updates =
-    let rec f' ?st ?srv () =
-      let* evt = Lwt_pipe.read evs in
-      match ((evt : Events.t option), st, srv) with
-      | Some (VoiceStateUpdate st), _, None ->
-          L.debug (fun m -> m "got voice state");
-          f' ~st ?srv ()
-      | Some (VoiceServerUpdate srv), None, _ ->
-          L.debug (fun m -> m "got voice server");
-          f' ?st ~srv ()
-      | Some (VoiceStateUpdate st), _, Some srv
-      | Some (VoiceServerUpdate srv), Some st, _ ->
-          Lwt_pipe.close_nonblock evs;
-          Lwt.return (st, srv)
-      | _ -> assert false
-    and evs =
-      let p = Lwt_pipe.create () in
-      Lwt_pipe.connect ~ownership:`InOwnsOut (Session.events session) p;
-      Lwt_pipe.Reader.filter p ~f:(function
-        | Events.VoiceStateUpdate st -> is_own_vs st
-        | Events.VoiceServerUpdate srv -> is_own_srv srv
-        | _ -> false)
+  let join () =
+    let* () =
+      Session.send_voice_state_update session ~channel_id ~self_deaf:false
+        ~self_mute:false guild_id
     in
-    f' ()
-  in
-  let* o =
-    Lwt.pick
-      [
-        Lwt_unix.sleep 5. |> Lwt.map (Fun.const `Timeout);
-        wait_for_updates |> Lwt.map (fun o -> `Ok o);
-      ]
-  in
-  let st, srv =
-    match o with
-    | `Ok o -> o
-    | `Timeout -> failwith "timed out waiting for update events"
-  in
-  let+ voice_conn =
-    Voice.create ~server_id:guild_id ~user_id:user.id ~session_id:st.session_id
+    let is_own_vs
+        { Events.VoiceState.guild_id = guild; channel_id = chan; user_id; _ } =
+      match (guild, chan) with
+      | Some g, Some c ->
+          Models.Snowflake.(guild_id = g && channel_id = c && user_id = user.id)
+      | _ -> false
+    in
+    let is_own_srv { Events.VoiceServerUpdate.guild_id = guild; _ } =
+      Models.Snowflake.(guild_id = guild)
+    in
+
+    let wait_for_updates =
+      let rec f' ?st ?srv () =
+        let* evt = Lwt_pipe.read evs in
+        match ((evt : Events.t option), st, srv) with
+        | Some (VoiceStateUpdate st), _, None ->
+            L.debug (fun m -> m "got voice state");
+            f' ~st ?srv ()
+        | Some (VoiceServerUpdate srv), None, _ ->
+            L.debug (fun m -> m "got voice server");
+            f' ?st ~srv ()
+        | Some (VoiceStateUpdate st), _, Some srv
+        | Some (VoiceServerUpdate srv), Some st, _ ->
+            Lwt.return (st, srv)
+        | _ -> assert false
+      and evs =
+        _fork_events t
+        |> Lwt_pipe.Reader.filter ~f:(function
+             | Events.VoiceStateUpdate st -> is_own_vs st
+             | Events.VoiceServerUpdate srv -> is_own_srv srv
+             | _ -> false)
+      in
+      let p = f' () in
+      Lwt.on_termination p (fun () ->
+          L.info (fun m -> m "closing events fork");
+          Lwt_pipe.close_nonblock evs);
+      p
+    in
+    let open Lwt_result.Syntax in
+    let* st, srv =
+      Lwt.pick
+        [
+          Lwt_unix.sleep 5. |> Lwt.map (Fun.const `Timeout);
+          wait_for_updates |> Lwt.map (fun o -> `Ok o);
+        ]
+      |> Lwt.map (function
+           | `Ok o -> Ok o
+           | `Timeout -> Error (`Discord "timed out waiting for update events"))
+    in
+    Voice.create
+      ~on_destroy:(fun _ ->
+        t.voice_sessions <- SfMap.remove guild_id t.voice_sessions)
+      ~server_id:guild_id ~user_id:user.id ~session_id:st.session_id
       ~token:srv.token srv.endpoint
   in
-  match voice_conn with Ok _ -> () | Error e -> failwith (Error.to_string e)
+  let open Lwt_result.Syntax in
+  let+ vc =
+    match SfMap.get guild_id t.voice_sessions with
+    | Some (cid, vc) when Models.Snowflake.(cid = channel_id) ->
+        L.info (fun m ->
+            m "there an active voice connection for channel '%Ld' already" cid);
+        Lwt.return (Ok vc)
+    | Some _ ->
+        L.info (fun m ->
+            m "already active voice session for guild %Ld, leaving..." guild_id);
+        let* () = leave_voice ~guild_id t |> Lwt_result.ok in
+        join ()
+    | None -> join ()
+  in
+  t.voice_sessions <- SfMap.add guild_id (channel_id, vc) t.voice_sessions;
+  vc
 
-let leave_voice ~guild_id { session; _ } =
-  Session.send_voice_state_update session ~self_mute:true ~self_deaf:true
-    guild_id
+let get_voice ~guild_id { voice_sessions; _ } =
+  SfMap.get guild_id voice_sessions

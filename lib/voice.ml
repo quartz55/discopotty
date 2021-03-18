@@ -1,4 +1,5 @@
 open Globals
+open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -11,7 +12,7 @@ module Ws = struct
 
   and t' = Open of Token_bucket.t * Ws_Conn.t | Closed
 
-  let create conn = ref (Open (Token_bucket.make ~capacity:1 2., conn))
+  let create conn = ref (Open (Token_bucket.make ~capacity:2 1., conn))
 
   let send t pl =
     match !t with
@@ -121,7 +122,8 @@ end
 type t = {
   disconnect : unit -> unit Lwt.t;
   ws_writer : Pl.send Lwt_pipe.Writer.t;
-  udp_writer : bytes Lwt_pipe.Writer.t;
+  speak : bool Lwt_pipe.Writer.t;
+  rtp_writer : bigstring Lwt_pipe.Writer.t;
 }
 
 type hb = {
@@ -131,6 +133,7 @@ type hb = {
   mutable cancel : unit -> unit;
 }
 
+(* TODO Check if resuming also implies a fresh UDP handshake *)
 type handshake_state =
   | Greet of conn
   | Id of hb
@@ -139,11 +142,7 @@ type handshake_state =
 
 and conn = Fresh | Reconnection of session
 
-and session = {
-  udp : Udp_connection.t;
-  mutable mode : string;
-  mutable secret : bytes;
-}
+and session = { rtp : Rtp.t; mutable speaking : bool }
 
 let make_heartbeat ?err fn interval =
   let err =
@@ -171,10 +170,13 @@ let make_heartbeat ?err fn interval =
     let p_preempt, u_preempt = Lwt.wait () in
     let p_sleep = Lwt_unix.sleep out.interval |> Lwt.map (Fun.const `Sleep) in
     out.ack <- (fun n -> if not !acked then acked := nonce = n);
-    out.cancel <- (fun () -> Lwt.wakeup_later u_preempt `Cancel);
+    out.cancel <-
+      (fun () ->
+        if Lwt.is_sleeping p_preempt then Lwt.wakeup_later u_preempt `Cancel);
     out.preempt <-
       (fun ?(interval = interval) () ->
-        Lwt.wakeup_later u_preempt (`Preempt interval));
+        if Lwt.is_sleeping p_preempt then
+          Lwt.wakeup_later u_preempt (`Preempt interval));
     let* r = Lwt.pick [ p_sleep; p_preempt ] in
     match (r, !acked) with
     | `Sleep, true -> loop ()
@@ -245,7 +247,8 @@ let do_handshake ~server_id ~user_id ~session_id ~token ?session ws pl_pipe =
                %a"
               Pl.Ready.pp info);
         let* udp = Udp_connection.create ~ssrc (ip, port) |> Error.catch_lwt in
-        let address, port = udp.ext_addr in
+        let ip, port = Udp_connection.local_addr udp in
+        let address = Unix.string_of_inet_addr ip in
         let* () =
           Ws.send ws
             (Pl.make_select_protocol ~address ~port ~mode:"xsalsa20_poly1305")
@@ -254,7 +257,9 @@ let do_handshake ~server_id ~user_id ~session_id ~token ?session ws pl_pipe =
     | Establish_udp (hb, udp), SessionDescription desc ->
         L.info (fun m -> m "successfuly handshaked voice connection");
         let secret = secret_of_int_list desc.secret_key in
-        Lwt_result.return (hb, { udp; mode = desc.mode; secret })
+        let mode = Udp_connection.encryption_mode_of_string desc.mode in
+        let crypt = Udp_connection.{ secret; mode } in
+        Lwt_result.return (hb, { rtp = Rtp.make ~udp ~crypt; speaking = false })
     | st, _pl ->
         L.warn (fun m -> m "ignoring non-control payload during handshake");
         poll' st
@@ -272,7 +277,8 @@ let create_conn uri =
         let ws = Ws.create ws in
         Lwt.wakeup_later u_conn (Ok ws);
         function
-        | Payload pl -> Lwt.async (fun () -> Lwt_pipe.write_exn p (`Pl pl))
+        | Payload pl ->
+            Lwt.async (fun () -> Lwt_pipe.write p (`Pl pl) >|= ignore)
         | Close code ->
             let code = Close_code.of_close_code_exn code in
             L.warn (fun m ->
@@ -292,8 +298,9 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
 
   let p_init, u_init = Lwt.wait () in
   let ws_writer = Lwt_pipe.create () in
-  let udp_writer = Lwt_pipe.create () in
-  let read_exn p = Lwt_pipe.read p |> Lwt.map Option.get_exn in
+  let rtp_writer = Lwt_pipe.create () in
+  let speak_pipe = Lwt_pipe.create () in
+  let read_exn p = Lwt_pipe.read p >|= Option.get_exn in
   let dc = ref (fun () -> Lwt.return ()) in
 
   let rec manage' ?session () =
@@ -325,37 +332,59 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
        fun () ->
          Lwt.wakeup_later u_dc `Dc;
          p_dc'ed);
-    (if Lwt.is_sleeping p_init then
-     let t = { disconnect = (fun () -> !dc ()); ws_writer; udp_writer } in
-     Lwt.wakeup_later u_init (Ok t));
+    if Lwt.is_sleeping p_init then
+      Lwt.wakeup_later u_init
+        (Ok
+           {
+             disconnect = (fun () -> !dc ());
+             ws_writer;
+             rtp_writer;
+             speak = speak_pipe;
+           });
 
+    let bus =
+      Lwt_pipe.Reader.merge_all
+        [
+          pipe |> Lwt_pipe.Reader.map ~f:(fun pl -> `Ws pl);
+          ws_writer |> Lwt_pipe.Reader.map ~f:(fun pl -> `Fwd pl);
+          speak_pipe |> Lwt_pipe.Reader.map ~f:(fun sp -> `Speak sp);
+          rtp_writer |> Lwt_pipe.Reader.map ~f:(fun pl -> `Fwd_rtp pl);
+        ]
+    in
     let rec poll' () =
       let open Lwt.Syntax in
-      let pl = read_exn pipe |> Lwt.map (fun ws -> `Ws ws) in
-      let fwd = read_exn ws_writer |> Lwt.map (fun pl -> `Fwd pl) in
-      let* res = Lwt.choose [ pl; fwd; p_dc ] in
+      let pl = read_exn bus in
+      let* res = Lwt.pick [ pl; p_dc ] in
       match res with
-      | `Fwd pl ->
-          let* () = Ws.send_exn ws pl in
-          poll' ()
+      | `Fwd pl -> Ws.send_exn ws pl >>= poll'
+      | `Speak sp when Stdlib.(sp != session.speaking) ->
+          session.speaking <- sp;
+          Ws.send_exn ws
+            (Pl.make_speaking ~ssrc:(Rtp.ssrc session.rtp) ~delay:0
+               (if sp then 1 else 0))
+          >>= poll'
+      | `Speak _ -> poll' ()
+      | `Fwd_rtp audio -> Rtp.send_packet session.rtp audio >>= poll'
       | `Ws (`Pl pl) -> handle_payload pl
       | `Ws (`Closed code) when Close_code.is_recoverable code ->
           L.warn (fun m ->
               m "session closed with recoverable close code, retrying...");
+          session.speaking <- false;
           manage' ~session ()
       | `Ws (`Closed code) ->
           L.error (fun m ->
               m "session closed with unrecoverable close code: %a" Close_code.pp
                 code);
-          let* () = Udp_connection.close session.udp in
+          let* () = Rtp.destroy session.rtp in
           Lwt.return
             (Error (`Discord (Format.asprintf "%a" Close_code.pp code)))
       | `Dc ->
-          Lwt_pipe.close_nonblock pipe;
-          Lwt_pipe.close_nonblock ws_writer;
-          let* () = Lwt_pipe.close udp_writer in
-          let* () = Udp_connection.close session.udp in
+          let* () = Lwt_pipe.close rtp_writer in
+          let* () = Rtp.destroy session.rtp in
           Ws.close ~code:`Normal_closure ws;
+          let* () = Lwt_pipe.close pipe in
+          Lwt_pipe.close_nonblock ws_writer;
+          Lwt_pipe.close_nonblock bus;
           Lwt.wakeup_later u_dc'ed ();
           Lwt.return (Ok ())
     and handle_payload = function
@@ -373,24 +402,24 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
               m "got session description, updating...@.%a"
                 Pl.SessionDescription.pp desc);
           let secret = secret_of_int_list desc.secret_key in
-          session.mode <- desc.mode;
-          session.secret <- secret;
+          let mode = Udp_connection.encryption_mode_of_string desc.mode in
+          Rtp.set_crypt session.rtp Udp_connection.{ secret; mode };
           poll' ()
       | HeartbeatACK nonce ->
           hb.ack nonce;
           poll' ()
-      | Speaking | Resumed | ClientDisconnect ->
+      | Speaking _ | Resumed | ClientDisconnect ->
           L.debug (fun m -> m "ignoring speaking/resumed/clientdisconnect");
           poll' ()
     in
     Lwt.bind (poll' ()) (fun e ->
-        let open Lwt.Infix in
         hb.cancel ();
         Ws.close ~code:`Going_away ws;
         Lwt_pipe.close_nonblock pipe;
         Lwt_pipe.close_nonblock ws_writer;
-        Lwt_pipe.close_nonblock udp_writer;
-        Udp_connection.close session.udp >|= fun () -> e)
+        Lwt_pipe.close_nonblock rtp_writer;
+        Lwt_pipe.close_nonblock bus;
+        Rtp.destroy ~drain:true session.rtp >|= fun () -> e)
   in
   Lwt.async (fun () ->
       manage' ()
@@ -401,6 +430,12 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
            | Error e -> on_destroy e));
   p_init
 
-let disconnect { disconnect; _ } = disconnect ()
+let _speak s { speak; _ } = Lwt_pipe.write_exn speak s
 
-(* let send_voice_data { ws_writer; udp_writer; _ } = *)
+let start_speaking = _speak true
+
+let stop_speaking = _speak false
+
+let send_rtp { rtp_writer; _ } audio = Lwt_pipe.write_exn rtp_writer audio
+
+let disconnect { disconnect; _ } = disconnect ()

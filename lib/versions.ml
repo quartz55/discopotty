@@ -19,5 +19,5 @@ module Voice = struct
 
   let to_string = function V4 -> "4"
 
-  let to_query t = ("v4", [ to_string t ])
+  let to_query t = ("v", [ to_string t ])
 end

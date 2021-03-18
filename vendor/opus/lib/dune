@@ -1,0 +1,43 @@
+(rule
+ (targets c_flags.sexp c_library_flags.sexp c_flags.lines)
+ (deps
+  (:discover config/discover.exe))
+ (action
+  (run %{discover})))
+
+(rule
+ (targets opus.ml opus_stubs.c)
+ (deps
+  (:gen opus.c.ml)
+  c_flags.lines)
+ (action
+  (chdir
+   %{workspace_root}
+   (run
+    %{bin:ppx_cstubs}
+    %{gen}
+    -pkg
+    ctypes
+    -o
+    %{targets}
+    --
+    %{read-lines:c_flags.lines}))))
+
+(library
+ (name opus)
+ (public_name opus)
+ (wrapped false)
+ (private_modules
+  (:standard \ opus))
+ (libraries unix ctypes ctypes.foreign ppx_cstubs)
+ (preprocess
+  (pps ppx_cstubs.merlin))
+ (foreign_stubs
+  (language c)
+  (names opus_stubs)
+  (flags
+   (:standard
+    (:include c_flags.sexp))))
+ (c_library_flags
+  (:standard
+   (:include c_library_flags.sexp))))

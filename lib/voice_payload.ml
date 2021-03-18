@@ -59,13 +59,24 @@ module Resume = struct
   let make ~server_id ~session_id ~token = { server_id; session_id; token }
 end
 
+module Speaking = struct
+  type t = {
+    speaking : int;
+    delay : int option; [@yojson.option]
+    ssrc : int option; [@yojson.option]
+  }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+
+  let make ?delay ?ssrc speaking = { speaking; delay; ssrc }
+end
+
 type _ t =
   | Identify : Identify.t -> Dir.send t
   | SelectProtocol : SelectProtocol.t -> Dir.send t
   | Ready : Ready.t -> Dir.recv t
   | Heartbeat : int -> Dir.send t
   | SessionDescription : SessionDescription.t -> Dir.recv t
-  | Speaking : _ Dir.bidi t
+  | Speaking : Speaking.t -> _ Dir.bidi t
   | HeartbeatACK : int -> Dir.recv t
   | Resume : Resume.t -> Dir.send t
   | Hello : int -> Dir.recv t
@@ -83,7 +94,7 @@ include Payload.Make (struct
     | Ready _ -> 2
     | Heartbeat _ -> 3
     | SessionDescription _ -> 4
-    | Speaking -> 5
+    | Speaking _ -> 5
     | HeartbeatACK _ -> 6
     | Resume _ -> 7
     | Hello _ -> 8
@@ -94,7 +105,7 @@ include Payload.Make (struct
     match (raw.Raw.op, raw.d) with
     | 2, Some d -> Ready (Ready.t_of_yojson d)
     | 4, Some d -> SessionDescription (SessionDescription.t_of_yojson d)
-    | 5, Some _d -> Speaking
+    | 5, Some d -> Speaking (Speaking.t_of_yojson d)
     | 6, Some d -> HeartbeatACK ([%of_yojson: int] d)
     | 8, Some d -> Hello (Hello.t_of_yojson d)
     | 9, _ -> Resumed
@@ -111,7 +122,7 @@ include Payload.Make (struct
     | Identify id -> Raw.make ~d:(Identify.yojson_of_t id) ()
     | SelectProtocol sp -> Raw.make ~d:(SelectProtocol.yojson_of_t sp) ()
     | Heartbeat nonce -> Raw.make ~d:(`Int nonce) ()
-    | Speaking -> Raw.make ()
+    | Speaking d -> Raw.make ~d:(Speaking.yojson_of_t d) ()
     | Resume d -> Raw.make ~d:(Resume.yojson_of_t d) ()
 end)
 
@@ -125,3 +136,5 @@ let make_select_protocol ~address ~port ~mode =
 
 let make_resume ~server_id ~session_id ~token =
   Resume (Resume.make ~server_id ~session_id ~token)
+
+let make_speaking ?ssrc ?delay s = Speaking (Speaking.make ?ssrc ?delay s)

@@ -25,4 +25,6 @@ let pp fmt t =
     "@[(%Ld@[(ts=%Ld)@] @[(wid=%d)@] @[(pid=%d)@] @[(inc=%d)@])@]" t
     (timestamp t) (worker_id t) (process_id t) (increment t)
 
-let (=) = Int64.equal
+let compare = Int64.compare
+
+let ( = ) = Int64.equal

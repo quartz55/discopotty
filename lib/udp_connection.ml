@@ -1,4 +1,5 @@
 open Globals
+open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -48,38 +49,32 @@ module Packet = struct
     let of_bigstring bs =
       Angstrom.parse_bigstring ~consume:Angstrom.Consume.All P.Ip.packet bs
 
-    let of_ic_lwt ic =
-      let open Lwt.Syntax in
-      let+ { len; _ }, res = Angstrom_lwt_unix.parse P.Ip.packet ic in
-      match (len, res) with
-      | 0, Ok pkt -> Ok pkt
-      | o, Ok _ ->
-          L.error (fun m ->
-              m "%d unconsummed bytes when deserialising UDP packet?" o);
-          assert false
-      | _, Error msg -> Error msg
-
     let write ~ssrc f =
       Faraday.BE.write_uint16 f 0x1;
       Faraday.BE.write_uint16 f 70;
       Faraday.BE.write_uint32 f (Int32.of_int ssrc);
       Faraday.write_bytes f (Bytes.create 66)
   end
+
+  module Keep_alive = struct
+    let write ~ssrc f = Faraday.BE.write_uint32 f (Int32.of_int ssrc)
+
+    let interval = 5.
+  end
+
+  module RTP = struct
+    let header_len = 12
+
+    let write_header ~seq ~ts ~ssrc f =
+      let s = Faraday.pending_bytes f in
+      Faraday.write_uint8 f 0x80;
+      Faraday.write_uint8 f 0x78;
+      Faraday.BE.write_uint16 f Uint16.(to_int seq);
+      Faraday.BE.write_uint32 f Uint32.(to_int32 ts);
+      Faraday.BE.write_uint32 f Int32.(of_int ssrc);
+      assert (Faraday.pending_bytes f - s = header_len)
+  end
 end
-
-let _send_ip ?(f = Faraday.create 74) ~ssrc sock =
-  Packet.Ip.write ~ssrc f;
-  let b = Faraday.serialize_to_string f |> Bytes.unsafe_of_string in
-  let len = Bytes.length b in
-  Lwt_unix.send sock b 0 len [] |> Lwt.map (fun n -> assert (n = len))
-
-let _recv_ip ?(buf = Bigstringaf.create 74) sock =
-  let open Lwt.Syntax in
-  let b = Bigstringaf.to_string buf |> Bytes.unsafe_of_string in
-  let* _ = Lwt_unix.read sock b 0 74 in
-  Bigstringaf.blit_from_bytes b ~src_off:0 buf ~dst_off:0 ~len:74;
-  let pkt = Packet.Ip.of_bigstring buf in
-  match pkt with Ok pkt -> Lwt.return pkt | Error msg -> failwith msg
 
 let ip_discovery ?(retries = 3) ?(timeout = 1.) ~ssrc sock =
   let open Lwt.Syntax in
@@ -87,12 +82,26 @@ let ip_discovery ?(retries = 3) ?(timeout = 1.) ~ssrc sock =
   let timeout () =
     Lwt_unix.sleep timeout |> Lwt.map (fun _ -> Error `Timeout)
   in
+  let send_ip ~f ~ssrc sock =
+    Packet.Ip.write ~ssrc f;
+    let b = Faraday.serialize_to_string f |> Bytes.unsafe_of_string in
+    let len = Bytes.length b in
+    Lwt_unix.send sock b 0 len [] >|= fun n -> assert (n = len)
+  in
+  let recv_ip ~buf sock =
+    let open Lwt.Syntax in
+    let b = Bigstringaf.to_string buf |> Bytes.unsafe_of_string in
+    let* _ = Lwt_unix.read sock b 0 74 in
+    Bigstringaf.blit_from_bytes b ~src_off:0 buf ~dst_off:0 ~len:74;
+    let pkt = Packet.Ip.of_bigstring buf in
+    match pkt with Ok pkt -> Lwt.return pkt | Error msg -> failwith msg
+  in
   let rec retry' n =
     let f = Faraday.of_bigstring buf in
-    let* () = _send_ip ~f ~ssrc sock in
+    let* () = send_ip ~f ~ssrc sock in
     Faraday.close f;
     L.debug (fun m -> m "sent ip discovery request packet");
-    let* o = Lwt.pick [ timeout (); _recv_ip ~buf sock |> Lwt_result.ok ] in
+    let* o = Lwt.pick [ timeout (); recv_ip ~buf sock |> Lwt_result.ok ] in
     match o with
     | Ok (_, ip, port) -> Lwt_result.return (ip, port)
     | Error `Timeout when n > 0 ->
@@ -108,32 +117,149 @@ let ip_discovery ?(retries = 3) ?(timeout = 1.) ~ssrc sock =
   retry' retries
 
 type t = {
-  f : Faraday.t;
   sock : Lwt_unix.file_descr;
-  ext_addr : string * int;
+  local_addr : Unix.inet_addr * int;
+  discord_addr : Unix.inet_addr * int;
   ssrc : int;
+  f : Faraday.t;
+  flush_packet : unit -> unit Lwt.t;
+  flush_p : [ `Flush | `Keep_alive ] Lwt_pipe.Writer.t;
 }
+
+type encryption_mode = Normal | Suffix | Lite of uint32 ref
+
+let encryption_mode_of_string = function
+  | "xsalsa20_poly1305" -> Normal
+  | "xsalsa20_poly1305_suffix" -> Suffix
+  | "xsalsa20_poly1305_lite" ->
+      Lite (ref (Random.int64 Int64.(2L ** 32L) |> Uint32.of_int64))
+  | m -> raise @@ Invalid_argument ("unsupported encryption mode " ^ m)
+
+type crypt = { mode : encryption_mode; secret : bytes }
+
+let encrypt ~nonce ~secret data =
+  let nonce = Sodium.Secret_box.Bigbytes.to_nonce nonce in
+  let secret = Sodium.Secret_box.Bytes.to_key secret in
+  Sodium.Secret_box.Bigbytes.secret_box secret data nonce
+
+let send_voice_packet ~crypt ~ts ~seq ~audio t =
+  let f = t.f in
+  Packet.RTP.write_header ~seq ~ts ~ssrc:t.ssrc f;
+  let encrypt nonce = encrypt audio ~nonce ~secret:crypt.secret in
+  let () =
+    match crypt.mode with
+    | Normal ->
+        let nonce = Faraday.create 24 in
+        Packet.RTP.write_header ~seq ~ts ~ssrc:t.ssrc nonce;
+        let padding =
+          String.make
+            (Sodium.Secret_box.nonce_size - Faraday.pending_bytes nonce)
+            '\x00'
+        in
+        Faraday.write_string nonce padding;
+        nonce |> Faraday.serialize_to_bigstring |> encrypt
+        |> Faraday.schedule_bigstring f
+    | Suffix ->
+        let nonce = Sodium.Secret_box.(random_nonce () |> Bigbytes.of_nonce) in
+        Faraday.schedule_bigstring f (encrypt nonce);
+        Faraday.schedule_bigstring f nonce
+    | Lite n ->
+        let nonce = Bigstringaf.create Sodium.Secret_box.nonce_size in
+        Bigstringaf.unsafe_set_int32_be nonce 0 (Uint32.to_int32 !n);
+        let _padding =
+          Seq.(
+            4 --^ Bigstringaf.length nonce
+            |> iter (fun i -> nonce.{i} <- '\x00'))
+        in
+        let next =
+          if Uint32.(compare !n max_int) = 0 then Uint32.zero
+          else Uint32.(!n + one)
+        in
+        n := next;
+        Faraday.schedule_bigstring f (encrypt nonce);
+        Faraday.schedule_bigstring f nonce
+  in
+  t.flush_packet ()
 
 let create ~ssrc (ip, port) =
   let open Lwt.Syntax in
   let sock =
-    Unix.socket Unix.PF_INET Unix.SOCK_DGRAM
+    Lwt_unix.socket Unix.PF_INET Unix.SOCK_DGRAM
       (Unix.getprotobyname "udp").Unix.p_proto
-    |> Lwt_unix.of_unix_file_descr
   in
+  let* () = Lwt_unix.bind sock Unix.(ADDR_INET (inet_addr_any, 0)) in
   let addr = Unix.inet_addr_of_string ip in
-  let sockaddr = Unix.ADDR_INET (addr, port) in
-  L.info (fun m -> m "connecting UDP socket to %s:%d" ip port);
-  let* () = Lwt_unix.connect sock sockaddr in
-  L.info (fun m -> m "discovering external ip...");
-  let+ ip_d, port_d =
+  let* () = Lwt_unix.connect sock Unix.(ADDR_INET (addr, port)) in
+  let discord_addr = (addr, port) in
+  L.info (fun m ->
+      m "discovering external ip using discord's voice server: %s:%d" ip port);
+  let* ip_d, port_d =
     ip_discovery ~ssrc sock
     |> Lwt.map (function Ok d -> d | Error msg -> failwith msg)
   in
   L.info (fun m -> m "discovered ip and port: %s:%d" ip_d port_d);
+  let local_addr = Unix.(inet_addr_of_string ip_d, port_d) in
   let f = Faraday.create (1024 * 4) in
-  { f; sock; ext_addr = (ip_d, port_d); ssrc }
+  let writev = Faraday_lwt_unix.writev_of_fd sock in
+  let flush_p = Lwt_pipe.create () in
+  let t =
+    {
+      f;
+      sock;
+      local_addr;
+      discord_addr;
+      ssrc;
+      flush_packet = (fun () -> Lwt_pipe.write_exn flush_p `Flush);
+      flush_p;
+    }
+  in
+  let yield =
+    let keep_alive =
+      Lwt_stream.from (fun () ->
+          Lwt_unix.sleep Packet.Keep_alive.interval >|= fun () ->
+          Some `Keep_alive)
+      |> Lwt_pipe.of_stream
+    in
+    Lwt_pipe.connect ~ownership:`OutOwnsIn keep_alive flush_p;
+    fun f ->
+      Lwt_pipe.read flush_p >|= function
+      | Some `Keep_alive ->
+          L.debug (fun m ->
+              m "sending UDP keepalive packet"
+                ~fields:
+                  Relog.Field.
+                    [
+                      int "ssrc" ssrc;
+                      float "interval" Packet.Keep_alive.interval;
+                    ]);
+          Packet.Keep_alive.write ~ssrc f
+      | Some `Flush -> ()
+      | None -> Faraday.close f
+  in
+  (* write loop *)
+  Lwt.async (fun () -> Faraday_lwt_unix.serialize f ~yield ~writev);
+  (* TODO: read loop *)
+  Lwt.async (fun () ->
+      let open Lwt.Infix in
+      let b = Bytes.create (1024 * 4) in
+      let b_len = Bytes.length b in
+      let rec f () =
+        Lwt_unix.read sock b 0 b_len >>= fun n ->
+        L.trace (fun m ->
+            m "got %d bytes from UDP (ssrc=%d) (rtcp? keepalive ack?)" n ssrc);
+        f ()
+      in
+      f ());
+  let+ () = Lwt_pipe.write_exn flush_p `Keep_alive in
+  t
 
-let close { f; sock; _ } =
-  Faraday.drain f |> ignore;
-  Lwt_unix.close sock
+let destroy ?(drain = false) { f; sock; flush_p; _ } =
+  match Lwt_unix.state sock with
+  | Lwt_unix.Opened ->
+      if drain then Faraday.drain f |> ignore |> Lwt.return
+      else Lwt_pipe.close flush_p
+  | Closed | Aborted _ -> Lwt.return_unit
+
+let local_addr { local_addr; _ } = local_addr
+
+let server_addr { discord_addr; _ } = discord_addr

@@ -4,8 +4,7 @@
   "description": "",
   "esy": {
     "build": "dune build -p #{self.name}",
-    "buildDev":
-      "dune build --promote-install-files --root . --only-package #{self.name}"
+    "buildDev": "dune build --promote-install-files --root . --only-package #{self.name}"
   },
   "scripts": {
     "bot": "esy x discopotty",
@@ -17,23 +16,30 @@
     "@opam/angstrom": "0.15.0",
     "@opam/angstrom-lwt-unix": "0.15.0",
     "@opam/bitstring": "4.1.0",
+    "@opam/conf-libsodium": "*",
     "@opam/containers": "3.2",
     "@opam/containers-data": "3.2",
     "@opam/dune": ">=2.8",
     "@opam/httpaf-lwt-unix": "*",
+    "@opam/hxd": "0.3.1",
     "@opam/lwt": "5.4.0",
     "@opam/lwt-pipe": "0.1",
     "@opam/mtime": "1.2.0",
+    "@discopotty/opus": "*",
     "@opam/piaf": "*",
     "@opam/ppx_bitstring": "4.1.0",
     "@opam/ppx_deriving": "5.2.1",
     "@opam/ppx_yojson_conv": "v0.14.0",
     "@opam/ptime": "0.8.5",
+    "@opam/sodium": "*",
+    "@opam/stdint": "0.7.0",
     "@opam/toml": "6.0.0",
     "@opam/uri": "4.1.0",
     "@opam/websocketaf": "*",
     "@opam/websocketaf-lwt-unix": "*",
     "@opam/yojson": "1.7.0",
+    "@opam/ocamlfind": "<1.9.0",
+    "esy-libsodium": "github:EduardoRFS/esy-libsodium#caeedd7",
     "ocaml": "~4.11.0",
     "relog": "*"
   },
@@ -51,16 +57,51 @@
     "@opam/httpaf": "anmonteiro/httpaf:httpaf.opam#0555dde",
     "@opam/httpaf-lwt": "anmonteiro/httpaf:httpaf-lwt.opam#0555dde",
     "@opam/httpaf-lwt-unix": "anmonteiro/httpaf:httpaf-lwt-unix.opam#0555dde",
-    "@opam/piaf":
-      "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
-    "@opam/websocketaf":
-      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
-    "@opam/websocketaf-lwt":
-      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
-    "@opam/websocketaf-lwt-unix":
-      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
+    "@opam/piaf": "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
+    "@opam/websocketaf": "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+    "@opam/websocketaf-lwt": "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
+    "@opam/websocketaf-lwt-unix": "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
     "@opam/conf-pkg-config": "1.3",
     "@opam/conf-libssl": "2",
+    "@opam/conf-libsodium": {
+      "source": "github:EduardoRFS/esy-libsodium:libsodium.opam#caeedd7",
+      "override": {
+        "dependencies": {
+          "esy-libsodium": "github:EduardoRFS/esy-libsodium#caeedd7"
+        }
+      }
+    },
+    "@opam/sodium": {
+      "source": "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
+      "override": {
+        "dependencies": {
+          "@opam/conf-libsodium": "*"
+        }
+      }
+    },
+    "@discopotty/opus": "link:./vendor/opus/package.json",
+    "@opam/conf-libopus": {
+      "source": "link:./vendor/esy-libopus/conf-libopus.opam",
+      "override": { "dependencies": { "esy-libopus": "./vendor/esy-libopus" } }
+    },
+    "esy-libopus": "./vendor/esy-libopus/package.json",
+    // "@opam/conf-libogg": {
+    //   "source": "link:./vendor/esy-libogg/conf-libogg.opam",
+    //   "override": {
+    //     "dependencies": {
+    //       "esy-libogg": "*"
+    //     }
+    //   }
+    // },
+    // "@opam/opus": {
+    //   "source": "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-opus/opus.opam",
+    //   "override": {
+    //     "dependencies": {
+    //       "@opam/conf-libopus": "*"
+    //     }
+    //   }
+    // },
+    // "esy-libogg": "./vendor/esy-libogg/package.json",
     "@esy-ocaml/reason": "reasonml/reason:reason.json#98e6c29",
     "relog": "quartz55/relog-native#d74d484"
   },
@@ -70,6 +111,8 @@
   },
   "author": "",
   "license": "ISC",
-  "bugs": { "url": "https://github.com/quartz55/discopotty-re/issues" },
+  "bugs": {
+    "url": "https://github.com/quartz55/discopotty-re/issues"
+  },
   "homepage": "https://github.com/quartz55/discopotty-re#readme"
 }

@@ -1,0 +1,25 @@
+opam-version: "2.0"
+maintainer: "https://github.com/ocaml/opam-repository/issues"
+homepage: "https://opus-codec.org/"
+bug-reports: "https://github.com/ocaml/opam-repository/issues"
+authors: "Xiph.Org Foundation"
+license: "BSD"
+build: ["pkg-config" "--exists" "opus"]
+depends: [
+  "conf-pkg-config" {build}
+]
+depexts: [
+  ["libopus-dev"] {os-distribution = "alpine"}
+  ["libopus"] {os-distribution = "arch"}
+  ["libopus-dev"] {os-family = "debian"}
+  ["libopus-devel"] {os-distribution = "centos"}
+  ["libopus-devel"] {os-distribution = "fedora"}
+  ["libopus-devel"] {os-family = "suse"}
+  ["libopus"] {os-distribution = "nixos"}
+  ["libopus"] {os-family = "bsd"}
+  ["libopus"] {os = "macos" & os-distribution = "homebrew"}
+]
+synopsis: "Virtual package relying on libopus"
+description:
+  "This package can only install if the opus library is installed on the system."
+flags: conf
