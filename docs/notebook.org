@@ -25,6 +25,23 @@ this limit are immediately disconnected from the Gateway.
 
 Don't really know what this means, but I'll stick with 2 events per second :p
 
+** DOING Refine Session
+Take some inspiration from ~voice.ml~
+
+*** DOING Investigate EOF reason in websockets
+Keep getting EOF consistently after connection. It seems to happen
+sporadically, but also seems to happen when the bot is in multiple guilds?
+- [ ] Experiment with the bot in multiple guilds after/during refinement
+- [ ] Seek out some more documentation or in discord's API guild
+
+* TODO Sharding
+First should actually research how to do it in a worthwhile way
++(since we are essencially stuck in single-threaded mode for now)+
+
+[2021-2-23 Tue] /Nevermind: Sharding is useful if only to decrease rate limiting bottlenecks./
+
+** TODO Identify Concurrency handling
+
 -------
 
 * DONE Voice Connection
@@ -112,16 +129,6 @@ these are the headers:
     A unique string denoting the rate limit being encountered
     (non-inclusive of major parameters in the route path)
 #+END_QUOTE
-
----------
-
-* TODO Sharding
-First should actually research how to do it in a worthwhile way
-+(since we are essencially stuck in single-threaded mode for now)+
-
-[2021-2-23 Tue] /Nevermind: Sharding is useful if only to decrease rate limiting bottlenecks./
-
-** TODO Identify Concurrency handling
 
 ---------
 

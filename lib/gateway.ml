@@ -1,4 +1,5 @@
 open Globals
+open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -8,7 +9,6 @@ module SfMap = Map.Make (Models.Snowflake)
 type t = {
   session : Session.t;
   mutable events : Events.t Lwt_stream.t;
-  user : Models.User.t;
   mutable voice_sessions : (snowflake * Voice.t) SfMap.t;
 }
 
@@ -39,15 +39,21 @@ let connect ?http token =
     match http with None -> Http.create token | Some d -> Lwt_result.return d
   in
   let* url = get_gateway_url http in
-  let+ session, user = Session.create token (Uri.of_string url) in
-  let rec t = { session; events; user; voice_sessions }
+  let+ session = Session.create token (Uri.of_string url) in
+  let rec t = { session; events; voice_sessions }
   and events = Session.events session |> Lwt_pipe.to_stream
   and voice_sessions = SfMap.empty in
   t
 
-let disconnect { session; _ } = Session.disconnect session
+let disconnect t =
+  SfMap.to_seq t.voice_sessions
+  |> Seq.map (fun (_, (_, vc)) -> Voice.disconnect vc)
+  |> Seq.to_list |> Lwt.join
+  >>= fun () ->
+  t.voice_sessions <- SfMap.empty;
+  Session.disconnect t.session
 
-let user { user; _ } = user
+let user { session; _ } = Session.user session
 
 let events { events; _ } = events |> Lwt_pipe.of_stream
 
@@ -63,8 +69,9 @@ let leave_voice ~guild_id ({ session; voice_sessions; _ } as t) =
         guild_id
   | None -> Lwt.return_unit
 
-let join_voice ~guild_id ~channel_id ({ session; user; _ } as t) =
+let join_voice ~guild_id ~channel_id ({ session; _ } as t) =
   let open Lwt.Syntax in
+  let user = Session.user session in
   let join () =
     let* () =
       Session.send_voice_state_update session ~channel_id ~self_deaf:false

@@ -10,3 +10,13 @@ let to_string = function
   | `Msg m -> m
 
 let catch_lwt p = Lwt_result.(catch p |> map_err (fun exn -> `Exn exn))
+
+let tap ~f r = function
+  | Ok o -> Ok o
+  | Error e ->
+      f e;
+      r
+
+let tap_lwt ~f r = function
+  | Ok o -> Lwt.return (Ok o)
+  | Error e -> Lwt.bind (f e) (fun () -> r)

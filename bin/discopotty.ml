@@ -68,7 +68,8 @@ end
 let handler cfg client =
   let prefix = Config.prefix cfg in
   Sys.set_signal Sys.sigint
-    (Sys.Signal_handle (fun _ -> D.Client.disconnect client));
+    (Sys.Signal_handle
+       (fun _ -> Lwt.async (fun () -> D.Client.disconnect client)));
   let open Lwt.Syntax in
   function
   | D.Events.MessageCreate { content; channel_id; guild_id; _ } -> (
@@ -82,7 +83,7 @@ let handler cfg client =
           let msg =
             Msg.fmt "⚠️ @{<b>@{<i>disconnecting by user request...@}@} 👋"
           in
-          let+ () = D.Client.send_message channel_id msg client in
+          let* () = D.Client.send_message channel_id msg client in
           D.Client.disconnect client
       | Some ("join", "") ->
           let msg =

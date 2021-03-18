@@ -1,4 +1,5 @@
 open Globals
+open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -16,13 +17,17 @@ module Ws = struct
   let send t pl =
     match !t with
     | Open (tb, conn) ->
-        Lwt.async (fun () ->
-            Token_bucket.take tb |> Lwt.map (fun () -> Ws_Conn.send conn pl));
-        true
-    | Closed -> false
+        Lwt.(
+          Token_bucket.take tb >|= fun () ->
+          Ws_Conn.send conn pl;
+          Ok ())
+    | Closed -> Lwt.return (Error (`Msg "cannot send payload to closed ws"))
 
   let send_exn t pl =
-    if not (send t pl) then failwith "cannot send payload to closed ws"
+    Lwt.(
+      send t pl >|= function
+      | Ok () -> ()
+      | Error e -> failwith (Error.to_string e))
 
   let close ~code t =
     match !t with
@@ -32,24 +37,23 @@ module Ws = struct
     | Closed -> ()
 end
 
+type info = { id : string; seq : int }
+
+type ev_tx = Events.t Lwt_pipe.Writer.t
+
 type t = {
-  mutable state : state;
-  mutable ws : Ws.t;
-  mutable disconnect : unit -> unit;
-  ev_pipe : (Events.t, [ `r | `w ]) Lwt_pipe.t;
-  ev_stream : Events.t Lwt_pipe.Reader.t;
-  writer : Pl.send Lwt_pipe.Writer.t;
+  user : Models.User.t;
+  disconnect : unit -> unit Lwt.t;
+  ev_rx : Events.t Lwt_pipe.Reader.t;
+  pl_tx : Pl.send Lwt_pipe.Writer.t;
 }
 
-and state =
+type handshake_state =
   | Greet of conn
   | Id of hb
-  | Resuming of session_info * hb
-  | Connected of session_info * hb
+  | Resuming of info * ev_tx * hb
 
-and conn = Fresh | Reconnection of session_info
-
-and session_info = { id : string; seq : int }
+and conn = Fresh | Reconnection of info * ev_tx
 
 and hb = {
   mutable interval : float;
@@ -96,10 +100,6 @@ let make_heartbeat ?err fn interval =
   Lwt.async loop;
   out
 
-let cancel_hb = function
-  | Id hb | Resuming (_, hb) | Connected (_, hb) -> hb.cancel ()
-  | _ -> ()
-
 let with_ws_params ?(zlib = false) ~enc ~version uri =
   (* let enc = match enc with `json -> "json" | `etf -> "etf" in *)
   let enc = match enc with `json -> "json" in
@@ -108,277 +108,272 @@ let with_ws_params ?(zlib = false) ~enc ~version uri =
     ([ ("encoding", [ enc ]); ("v", [ Versions.Gateway.to_string version ]) ]
     @ if zlib then [ ("compress", [ "zlib-stream" ]) ] else [])
 
-let session_logger : t -> (module Relog.Logger.S) =
- fun t ->
-  Relog.clone
-    ~fields:
-      F.
-        [
-          lazy_int "seq" (fun () ->
-              match t.state with
-              | Connected ({ seq; _ }, _)
-              | Greet (Reconnection { seq; _ })
-              | Resuming ({ seq; _ }, _) ->
-                  seq
-              | _ -> -1);
-          lazy_str "session_id" (fun () ->
-              match t.state with
-              | Connected ({ id; _ }, _)
-              | Greet (Reconnection { id; _ })
-              | Resuming ({ id; _ }, _) ->
-                  id
-              | _ -> "<not connected>");
-          lazy_bool "reconn" (fun () ->
-              match t.state with
-              | Resuming _ | Greet (Reconnection _) -> true
-              | _ -> false);
-        ]
-    (module L)
-
-let state_reducer ~(session_logger : (module Relog.Logger.S)) ~forward_event
-    ~send_payload ~(on_ready : ?user:Models.User.t -> unit -> unit) ~token state
-    pl =
-  let module L = (val session_logger) in
+let do_handshake ~token ?reconn ws pl_rx =
+  let module L =
+  (val Relog.clone (module L) ~fields:F.[ bool "handshaking" true ])
+  in
+  let open Lwt_result.Syntax in
   let make_hb interval =
     make_heartbeat
       (fun () ->
-        L.info (fun m ->
-            m "sending heartbeat" ~fields:F.[ float "hb_interval" interval ]);
-        send_payload Pl.heartbeat)
+        L.debug (fun m ->
+            m "sending heartbeat" ~fields:F.[ float "interval" interval ]);
+        Lwt.async (fun () -> Ws.send_exn ws Pl.heartbeat))
       interval
   in
-  match (state, pl) with
-  | Greet Fresh, Pl.Hello hb ->
-      let id = Pl.Identify.make token in
-      L.info (fun m ->
-          m "got greeting, identifying (intents=%a)" Pl.Intents.pp id.intents);
-      send_payload (Pl.Identify id);
-      let hb_secs = Float.of_int hb /. 1_000. in
-      let hb = make_hb hb_secs in
-      `Update (Id hb)
-  | Greet (Reconnection ({ id; seq; _ } as info)), Hello hb ->
-      L.info (fun m ->
-          m "got greeting, resuming session '%s' with seq=%d" id seq);
-      send_payload (Pl.make_resume ~token ~session_id:id ~seq);
-      let hb_secs = Float.of_int hb /. 1_000. in
-      let hb = make_hb hb_secs in
-      `Update (Resuming (info, hb))
-  | Greet _conn, InvalidSession _ ->
-      L.warn (fun m -> m "invalid session during initial greeting");
-      `Invalidated
-  | Greet _, Heartbeat ->
-      L.warn (fun m -> m "got hearbeat request during greeting, ignoring...");
-      `NoUpdate
-  | Greet _, HeartbeatACK ->
-      L.warn (fun m -> m "got hearbeat ack during handshake, ignoring...");
-      `NoUpdate
-  | Greet Fresh, Reconnect ->
-      L.warn (fun m ->
-          m "got reconnection request during greeting, obliging...");
-      `Retry
-  | Greet (Reconnection info), Reconnect ->
-      L.warn (fun m ->
-          m "got reconnection request during reconnection greeting, obliging...");
-      `RetryWith info
-  | Id hb, Dispatch (seq, Events.Ready info) ->
-      let s_id = info.session_id in
-      L.info (fun m ->
-          m "session is ready"
-            ~fields:F.[ int "version" info.v; str "id" s_id; int "seq" seq ]);
-      on_ready ~user:info.user ();
-      `Update (Connected ({ id = s_id; seq }, hb))
-  | (Id hb | Resuming (_, hb) | Connected (_, hb)), Hello new_hb ->
-      L.warn (fun m -> m "got new greeting, updating heartbeat");
-      let hb_secs = Float.of_int new_hb /. 1_000. in
-      hb.preempt ~interval:hb_secs ();
-      `NoUpdate
-  | Id _hb, InvalidSession _ ->
-      L.err (fun m -> m "session was invalidated while identifying");
-      `Invalidated
-  | Id _hb, Reconnect ->
-      L.warn (fun m -> m "got reconnection request while identifying");
-      `Retry
-  | (Greet _ | Id _), Dispatch _ ->
-      L.warn (fun m ->
-          m "received dispatch during initial handshake, ignoring...");
-      `NoUpdate
-  | (Id hb | Resuming (_, hb) | Connected (_, hb)), Heartbeat ->
-      L.info (fun m -> m "requested heartbeat, obliging...");
-      hb.preempt ();
-      `NoUpdate
-  | (Id hb | Resuming (_, hb) | Connected (_, hb)), HeartbeatACK ->
-      L.debug (fun m -> m "got hearbeat ack");
-      hb.ack ();
-      `NoUpdate
-  | Resuming (_, hb), InvalidSession _ ->
-      L.warn (fun m ->
-          m "couldn't resume session, waiting for %fs and identifying..." 3.4);
-      let id = Pl.Identify.make token in
-      L.info (fun m ->
-          m "got greeting, identifying (intents=%a)" Pl.Intents.pp id.intents);
-      Lwt.async (fun () ->
-          Lwt_unix.sleep 3.4
-          |> Lwt.map (fun () -> send_payload (Pl.Identify id)));
-      `Update (Id hb)
-  | Resuming (info, _hb), Reconnect -> `RetryWith info
-  | Resuming (({ id; _ } as i), hb), Dispatch (e_seq, Resumed) ->
-      on_ready ();
-      L.info (fun m -> m "successfully resumed session '%s'" id);
-      `Update (Connected ({ i with seq = e_seq }, hb))
-  | Resuming (({ seq; _ } as i), hb), Dispatch (e_seq, e) ->
-      L.info (fun m ->
-          m "forwarding replayed event"
-            ~fields:F.[ int "seq" seq; int "event_seq" e_seq ]);
-      forward_event e;
-      `Update (Connected ({ i with seq = e_seq }, hb))
-  | Connected (({ id; seq; _ } as info), _hb), Reconnect ->
-      L.warn (fun m ->
-          m "got reconnection request" ~fields:F.[ str "id" id; int "seq" seq ]);
-      `RetryWith info
-  | Connected (({ seq; id; _ } as info), _hb), InvalidSession resume ->
-      L.warn (fun m ->
-          m "session invalidated" ~fields:F.[ bool "resumable" resume ]);
-      if resume then (
-        L.info (fun m -> m "will try to resume session '%s' on seq=%d" id seq);
-        `RetryWith info)
-      else `Retry
-  | Connected (({ seq; _ } as i), hb), Dispatch (e_seq, e) ->
-      L.info (fun m ->
-          m "forwarding event"
-            ~fields:F.[ int "seq" seq; int "event_seq" e_seq ]);
-      forward_event e;
-      `Update (Connected ({ i with seq = e_seq }, hb))
+  let rec poll' st =
+    let* pl =
+      Lwt_pipe.read pl_rx >|= function
+      | Some (`Pl pl) -> Ok pl
+      | Some (`Closed code) -> Error (`Closed code)
+      | None -> assert false
+    in
+    match (st, pl) with
+    | Greet Fresh, Pl.Hello hb ->
+        let id = Pl.Identify.make token in
+        L.info (fun m ->
+            m "got greeting, identifying (intents=%a)" Pl.Intents.pp id.intents);
+        let* () = Ws.send ws (Pl.Identify id) in
+        let hb_secs = Float.of_int hb /. 1_000. in
+        let hb = make_hb hb_secs in
+        poll' (Id hb)
+        |> Lwt_result.map_err (fun e ->
+               hb.cancel ();
+               e)
+    | Greet (Reconnection (info, ev_tx)), Hello hb ->
+        L.info (fun m ->
+            m "got greeting, resuming session '%s' with seq=%d" info.id info.seq);
+        let* () =
+          Ws.send ws (Pl.make_resume ~token ~session_id:info.id ~seq:info.seq)
+        in
+        let hb_secs = Float.of_int hb /. 1_000. in
+        let hb = make_hb hb_secs in
+        poll' (Resuming (info, ev_tx, hb))
+        |> Lwt_result.map_err (fun e ->
+               hb.cancel ();
+               e)
+    | (Greet _ as st), (Heartbeat | HeartbeatACK) ->
+        (* safe to ignore heartbeat related payloads during greeting
+           as we'll send an heartbeat as soon as we can *)
+        poll' st
+    | (Greet _ as st), _ ->
+        L.err (fun m ->
+            m "!!!BROKEN!!! got something else other than Hello when greeting");
+        poll' st
+    | ((Id hb | Resuming (_, _, hb)) as st), Pl.Hello new_hb ->
+        L.info (fun m -> m "got new greeting, updating heartbeat");
+        let hb_secs = Float.of_int new_hb /. 1_000. in
+        hb.preempt ~interval:hb_secs ();
+        poll' st
+    | ((Id hb | Resuming (_, _, hb)) as st), Pl.Heartbeat ->
+        L.debug (fun m -> m "requested heartbeat, obliging...");
+        hb.preempt ();
+        poll' st
+    | ((Id hb | Resuming (_, _, hb)) as st), Pl.HeartbeatACK ->
+        L.debug (fun m -> m "got hearbeat ack");
+        hb.ack ();
+        poll' st
+    | Id hb, Dispatch (seq, Events.Ready info) ->
+        let id = info.session_id in
+        L.info (fun m ->
+            m "session is ready"
+              ~fields:F.[ int "version" info.v; str "id" id; int "seq" seq ]);
+        Lwt_result.return (`Connected (info.user, { id; seq }, hb))
+    | Id _, InvalidSession _ ->
+        L.err (fun m -> m "session was invalidated while identifying");
+        Lwt_result.fail `Invalidated
+    | (Id _ as st), Dispatch _ ->
+        L.warn (fun m ->
+            m "ignoring non ready dispatch event during identification");
+        poll' st
+    | Resuming (info, _, hb), Dispatch (seq, Resumed) ->
+        L.info (fun m -> m "successfully resumed session '%s'" info.id);
+        Lwt_result.return (`Reconnected ({ info with seq }, hb))
+    | Resuming (info, ev_tx, hb), Dispatch (seq, ev) ->
+        L.debug (fun m ->
+            m "forwarding replayed event"
+              ~fields:F.[ int "seq" seq; int "event_seq" seq ]);
+        let* () = Lwt_pipe.write_exn ev_tx ev |> Error.catch_lwt in
+        poll' (Resuming ({ info with seq }, ev_tx, hb))
+    | Resuming (_, _, hb), InvalidSession _ ->
+        let rand_wait =
+          let r = Random.(run (float_range 1. 5.)) in
+          (* only need precision up to ms *)
+          truncate (r *. 1e3) |> float |> ( /. ) 1e3
+        in
+        L.warn (fun m ->
+            m "couldn't resume session, waiting for %fs and identifying..."
+              rand_wait);
+        let id = Pl.Identify.make token in
+        L.info (fun m ->
+            m "got greeting, identifying (intents=%a)" Pl.Intents.pp id.intents);
+        let* () =
+          Lwt_unix.sleep rand_wait >>= fun () -> Ws.send ws (Pl.Identify id)
+        in
+        poll' (Id hb)
+    | _, Reconnect -> Lwt_result.fail `Retry
+  in
+  let c =
+    match reconn with
+    | Some (info, ev_tx) -> Reconnection (info, ev_tx)
+    | None -> Fresh
+  in
+  poll' (Greet c)
 
-let create ?(zlib = false) ?(version = Versions.Gateway.V8) token uri =
+let create_conn uri =
+  let open Lwt_result.Syntax in
+  let p = Lwt_pipe.create () in
+  let p_conn, u_conn = Lwt.wait () in
+  let* () =
+    Ws_Conn.create ~zlib:false
+      ~handler:(fun ws ->
+        let ws = Ws.create ws in
+        Lwt.wakeup_later u_conn (Ok ws);
+        function
+        | Payload pl ->
+            Lwt.async (fun () -> Lwt_pipe.write p (`Pl pl) >|= ignore)
+        | Close code ->
+            L.warn (fun m ->
+                m "voice ws session was closed: %a" Websocket.Close_code.pp code);
+            Lwt.async (fun () ->
+                let w = Lwt_pipe.write_exn p (`Closed code) in
+                Lwt.bind w (fun () -> Lwt_pipe.close p)))
+      uri
+  in
+  let+ ws = p_conn in
+  ( ws,
+    (p
+      : [ `Pl of Pl.recv | `Closed of Websocket.Close_code.t ] Lwt_pipe.Reader.t)
+  )
+
+let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
+    ?(version = Versions.Gateway.V8) token uri =
   let open Lwt_result.Syntax in
   let uri = uri |> with_ws_params ~zlib ~version ~enc:`json in
 
   let p_init, u_init = Lwt.wait () in
-  let send_pipe = Lwt_pipe.create () in
-  let rec manager ?t () =
-    let p_connected, u_connected = Lwt.wait () in
-    let p_closed, u_closed = Lwt.wait () in
-    let ws_conn_handler : Ws_Conn.handler =
-     fun ws ->
-      let ws = Ws.create ws in
-      let disconnect () = Lwt.wakeup_later u_closed `Disconnect in
-      let t =
-        match t with
-        | Some t ->
-            Ws.close ~code:`Normal_closure t.ws;
-            t.ws <- ws;
-            t.disconnect <- disconnect;
-            t
-        | None ->
-            let p = Lwt_pipe.create ~max_size:10 () in
-            {
-              state = Greet Fresh;
-              ws;
-              ev_pipe = p;
-              ev_stream = p;
-              disconnect;
-              writer = send_pipe;
-            }
-      in
-      let module L = (val session_logger t) in
-      let send_payload = Ws.send_exn t.ws in
-      let forward_event = function
-        | Events.Unsupported (n, _) ->
-            L.warn (fun m -> m "unsupported event: %s" n)
-        | ev ->
-            Lwt.async (fun () ->
-                Lwt_pipe.write_exn t.ev_pipe ev
-                |> Lwt.map (fun () ->
-                       L.debug (fun m -> m "wrote to events pipe")))
-      in
-      let on_ready ?user () = Lwt.wakeup_later u_connected (Ok (t, user)) in
-      let invalidated = ref false in
-      let handle_payload =
-        let f' =
-          state_reducer
-            ~session_logger:(module L)
-            ~forward_event ~send_payload ~on_ready ~token
-        in
-        fun pl ->
-          match f' t.state pl with
-          | `NoUpdate -> ()
-          | `Update st -> t.state <- st
-          | `Retry ->
-              Ws.close ~code:`Normal_closure t.ws;
-              Lwt.wakeup_later u_closed (`Retry None)
-          | `RetryWith info ->
-              Ws.close ~code:`Abnormal_closure t.ws;
-              Lwt.wakeup_later u_closed (`Retry (Some info))
-          | `Invalidated -> invalidated := true
-      in
-      fun frame ->
-        match (frame, !invalidated) with
-        | Payload pl, false -> handle_payload pl
-        | Payload _, true -> ()
-        | Close code, _ ->
-            L.warn (fun m ->
-                m "session was closed with code %a" Websocket.Close_code.pp code);
-            let reason =
-              (* Make (or extend) type for Discord error codes *)
-              match code with
-              | `Normal_closure | `Other 4006 | `Other 4007 -> `Retry None
-              | `Other 4004 -> `Invalid "invalid token"
-              | _ -> `Invalid "unknown"
-            in
-            Lwt.wakeup_later u_closed reason
+  let ev_pipe = Lwt_pipe.create () in
+  let pl_pipe = Lwt_pipe.create () in
+  let read_exn p = Lwt_pipe.read p >|= Option.get_exn in
+  let dc = ref (fun () -> Lwt.return ()) in
+
+  let rec manage' ?session () =
+    let rec connect () =
+      let* ws, pipe = create_conn uri in
+      do_handshake ~token ?reconn:session ws pipe >>= function
+      | Ok res -> Lwt_result.return (ws, pipe, res)
+      | Error (`Closed _) ->
+          L.warn (fun m -> m "session closed during handshake");
+          Lwt_result.fail (`Discord "unrecoverable close code during handshake")
+      | Error `Invalidated ->
+          L.warn (fun m ->
+              m "session invalidated during handshake, invalid permissions?");
+          Lwt_result.fail (`Discord "unrecoverable close code during handshake")
+      | Error `Retry ->
+          L.warn (fun m -> m "retrying handshake");
+          connect ()
+      | Error #Error.t as e -> Lwt.return e
     in
-    let* () = Ws_Conn.create ~zlib ~handler:ws_conn_handler uri in
-    let* t, user = p_connected in
-    let () =
-      match user with
-      | Some user when Lwt.is_sleeping p_init ->
-          Lwt.wakeup_later u_init (Ok (t, user))
-      | _ -> ()
+    let* ws, pipe, res = connect () in
+    let bus =
+      Lwt_pipe.Reader.merge_all
+        [
+          pipe |> Lwt_pipe.Reader.map ~f:(fun pl -> `Ws pl);
+          pl_pipe |> Lwt_pipe.Reader.map ~f:(fun pl -> `Fwd pl);
+        ]
     in
-    let rec manage' () =
+    let p_dc, u_dc = Lwt.wait () in
+    let p_dc'ed, u_dc'ed = Lwt.wait () in
+    (dc :=
+       fun () ->
+         if Lwt.is_sleeping p_dc then Lwt.wakeup_later u_dc `Dc;
+         p_dc'ed);
+    let info, hb =
+      match res with
+      | `Connected (user, info, hb) ->
+          if Lwt.is_sleeping p_init then
+            Lwt.wakeup_later u_init
+              (Ok
+                 {
+                   user;
+                   disconnect = (fun () -> !dc ());
+                   ev_rx = ev_pipe;
+                   pl_tx = pl_pipe;
+                 });
+          (ref info, hb)
+      | `Reconnected (info, hb) -> (ref info, hb)
+    in
+    let rec poll' () =
       let open Lwt.Syntax in
-      let forward_pl =
-        Lwt_pipe.read send_pipe
-        |> Lwt.map (function
-             | Some pl -> `Forward_payload pl
-             | None -> failwith "!BUG! send_pipe should never have been closed")
-      in
-      let* reason = Lwt.pick [ forward_pl; p_closed ] in
-      match reason with
-      | `Forward_payload pl ->
-          let* () = Lwt.wrap (fun () -> Ws.send_exn t.ws pl) in
-          manage' ()
-      | `Retry None ->
-          cancel_hb t.state;
-          t.state <- Greet Fresh;
-          manager ~t ()
-      | `Retry (Some info) ->
-          cancel_hb t.state;
-          t.state <- Greet (Reconnection info);
-          manager ~t ()
-      | `Disconnect ->
-          cancel_hb t.state;
-          Ws.close ~code:`Going_away t.ws;
-          let* () = Lwt_pipe.close t.ev_pipe in
+      let pl = read_exn bus in
+      let* res = Lwt.pick [ pl; p_dc ] in
+      match res with
+      | `Fwd pl -> Ws.send_exn ws pl >>= poll'
+      | `Ws (`Pl pl) -> handle_payload pl
+      | `Ws (`Closed code) ->
+          L.error (fun m ->
+              m "session closed with unrecoverable close code: %a"
+                Websocket.Close_code.pp code);
+          Lwt_result.fail
+            (`Discord
+              (Format.asprintf "unrecoverable close code: %a"
+                 Websocket.Close_code.pp code))
+      | `Dc ->
+          let* () = Lwt_pipe.close pl_pipe in
+          Ws.close ~code:`Normal_closure ws;
+          let* () = Lwt_pipe.close pipe in
+          let* () = Lwt_pipe.close bus in
+          Lwt.wakeup_later u_dc'ed ();
           Lwt_result.return ()
-      | `Invalid msg ->
-          cancel_hb t.state;
-          Lwt_result.fail (`Discord msg)
+    and handle_payload = function
+      | Hello new_hb ->
+          L.warn (fun m -> m "got new greeting, updating heartbeat");
+          hb.preempt ~interval:(float new_hb /. 1e3) ();
+          poll' ()
+      | Heartbeat ->
+          L.debug (fun m -> m "requested hearbeat, obliging...");
+          hb.preempt ();
+          poll' ()
+      | HeartbeatACK ->
+          L.debug (fun m -> m "got heartbeat ack");
+          hb.ack ();
+          poll' ()
+      | InvalidSession resumable ->
+          L.warn (fun m -> m "session invalidated (resumable=%b)" resumable);
+          assert false
+      | Reconnect ->
+          L.warn (fun m -> m "got reconnection request, obliging...");
+          hb.cancel ();
+          manage' ~session:(!info, ev_pipe) ()
+      | Dispatch (seq, Ready _) | Dispatch (seq, Resumed) ->
+          L.warn (fun m ->
+              m "ignoring handshake related payloads on established session");
+          info := { !info with seq };
+          poll' ()
+      | Dispatch (seq, ev) ->
+          info := { !info with seq };
+          Lwt_pipe.write_exn ev_pipe ev >>= poll'
     in
-    manage' ()
+    poll' () >>= fun out ->
+    hb.cancel ();
+    Ws.close ~code:`Going_away ws;
+    Lwt_pipe.close_nonblock pl_pipe;
+    Lwt_pipe.close_nonblock pipe;
+    Lwt_pipe.close_nonblock bus;
+    Lwt.return out
   in
   Lwt.async (fun () ->
-      manager ()
-      |> Lwt.map (function
-           | Ok () -> ()
-           | Error _ as err when Lwt.is_sleeping p_init ->
-               Lwt.wakeup_later u_init err
-           | Error e -> failwith (Error.to_string e)));
+      manage' () >|= function
+      | Ok () -> ()
+      | Error e when Lwt.is_sleeping p_init -> Lwt.wakeup_later u_init (Error e)
+      | Error e -> on_destroy e);
   p_init
 
-let events { ev_stream; _ } = ev_stream
+let events { ev_rx; _ } = ev_rx
 
-let _send_exn { writer; _ } pl = Lwt_pipe.write_exn writer pl
+let user { user; _ } = user
+
+let _send_exn { pl_tx; _ } pl = Lwt_pipe.write_exn pl_tx pl
 
 let send_presence_update t ?since ~afk status =
   _send_exn t (Pl.make_presence_update ?since ~afk status)

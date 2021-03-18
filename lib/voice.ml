@@ -370,6 +370,7 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
           L.warn (fun m ->
               m "session closed with recoverable close code, retrying...");
           session.speaking <- false;
+          hb.cancel ();
           manage' ~session ()
       | `Ws (`Closed code) ->
           L.error (fun m ->
