@@ -25,7 +25,7 @@ this limit are immediately disconnected from the Gateway.
 
 Don't really know what this means, but I'll stick with 2 events per second :p
 
-** DOING Refine Session
+** DONE Refine Session
 Take some inspiration from ~voice.ml~
 
 *** DOING Investigate EOF reason in websockets
@@ -41,6 +41,9 @@ First should actually research how to do it in a worthwhile way
 [2021-2-23 Tue] /Nevermind: Sharding is useful if only to decrease rate limiting bottlenecks./
 
 ** TODO Identify Concurrency handling
+A global lock/token bucket should suffice.
+Maybe make it a map of ~(bot token)->(token bucket)~ in case the user
+wants to run multiple different bots in a single application.
 
 -------
 
@@ -48,14 +51,13 @@ First should actually research how to do it in a worthwhile way
 ** DONE Voice Gateway Protocol
 *** DONE IP Discovery
 ** DONE Voice UDP
-    *** DONE Test soundbite
-
+*** DONE Test soundbite
 
 -------
 
 * DOING Error type
 Still not quite sure what the best approach is here.
-I guess time will tell, as needs come by
+I guess time will tell, as needs come by.
 /(or a good examle while looking at sources 👀)/
 
 -------
@@ -90,9 +92,9 @@ Maybe too much work for what it's worth (~[@@deriving yojson]~ is ❤️)
 
 ---------
 
-* TODO Rate Limiting
-** DONE Internal tokenbucket implementation
-** TODO Sync with Discord's buckets
+* DOING Rate Limiting
+** DONE Internal token bucket implementation
+** TODO HTTP
 As per [[https://discord.com/developers/docs/topics/rate-limits][the docs]],
 these are the headers:
 
@@ -129,6 +131,8 @@ these are the headers:
     A unique string denoting the rate limit being encountered
     (non-inclusive of major parameters in the route path)
 #+END_QUOTE
+
+** DONE Websockets (Gateway and Voice)
 
 ---------
 

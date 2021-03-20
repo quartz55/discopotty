@@ -32,6 +32,7 @@ module Ws = struct
   let close ~code t =
     match !t with
     | Open (tb, conn) ->
+        t := Closed;
         Token_bucket.cancel_waiting tb;
         Ws_Conn.close ~code conn
     | Closed -> ()
@@ -158,7 +159,9 @@ let do_handshake ~token ?reconn ws pl_rx =
         poll' st
     | (Greet _ as st), _ ->
         L.err (fun m ->
-            m "!!!BROKEN!!! got something else other than Hello when greeting");
+            m
+              "!!!PROTOCOL VIOLATION!!! got something else other than Hello \
+               when greeting");
         poll' st
     | ((Id hb | Resuming (_, _, hb)) as st), Pl.Hello new_hb ->
         L.info (fun m -> m "got new greeting, updating heartbeat");
@@ -199,7 +202,7 @@ let do_handshake ~token ?reconn ws pl_rx =
         let rand_wait =
           let r = Random.(run (float_range 1. 5.)) in
           (* only need precision up to ms *)
-          truncate (r *. 1e3) |> float |> ( /. ) 1e3
+          float (truncate (r *. 1e3)) /. 1e3
         in
         L.warn (fun m ->
             m "couldn't resume session, waiting for %fs and identifying..."
@@ -231,13 +234,17 @@ let create_conn uri =
         Lwt.wakeup_later u_conn (Ok ws);
         function
         | Payload pl ->
-            Lwt.async (fun () -> Lwt_pipe.write p (`Pl pl) >|= ignore)
+            Lwt.async (fun () ->
+                Lwt_pipe.write p (`Pl pl) >|= fun ok ->
+                if not ok then Ws.close ~code:`Normal_closure ws)
         | Close code ->
             L.warn (fun m ->
-                m "voice ws session was closed: %a" Websocket.Close_code.pp code);
+                m "gateway ws session was closed: %a" Websocket.Close_code.pp
+                  code);
             Lwt.async (fun () ->
-                let w = Lwt_pipe.write_exn p (`Closed code) in
-                Lwt.bind w (fun () -> Lwt_pipe.close p)))
+                Lwt_pipe.write p (`Closed code) >>= function
+                | true -> Lwt_pipe.close p
+                | false -> Lwt.return_unit))
       uri
   in
   let+ ws = p_conn in
@@ -319,10 +326,10 @@ let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
               (Format.asprintf "unrecoverable close code: %a"
                  Websocket.Close_code.pp code))
       | `Dc ->
-          let* () = Lwt_pipe.close pl_pipe in
           Ws.close ~code:`Normal_closure ws;
-          let* () = Lwt_pipe.close pipe in
-          let* () = Lwt_pipe.close bus in
+          Lwt_pipe.close_nonblock pipe;
+          Lwt_pipe.close_nonblock pl_pipe;
+          Lwt_pipe.close_nonblock bus;
           Lwt.wakeup_later u_dc'ed ();
           Lwt_result.return ()
     and handle_payload = function
@@ -340,10 +347,15 @@ let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
           poll' ()
       | InvalidSession resumable ->
           L.warn (fun m -> m "session invalidated (resumable=%b)" resumable);
-          assert false
+          let session = if resumable then Some (!info, ev_pipe) else None in
+          hb.cancel ();
+          Lwt_pipe.close_nonblock bus;
+          (* TODO what to do in case of `false` again?? *)
+          manage' ?session ()
       | Reconnect ->
           L.warn (fun m -> m "got reconnection request, obliging...");
           hb.cancel ();
+          Lwt_pipe.close_nonblock bus;
           manage' ~session:(!info, ev_pipe) ()
       | Dispatch (seq, Ready _) | Dispatch (seq, Resumed) ->
           L.warn (fun m ->
@@ -352,15 +364,16 @@ let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
           poll' ()
       | Dispatch (seq, ev) ->
           info := { !info with seq };
-          Lwt_pipe.write_exn ev_pipe ev >>= poll'
+          Lwt_pipe.write ev_pipe ev >>= fun ok ->
+          if ok then poll' () else Lwt_result.return ()
     in
     poll' () >>= fun out ->
     hb.cancel ();
     Ws.close ~code:`Going_away ws;
-    Lwt_pipe.close_nonblock pl_pipe;
     Lwt_pipe.close_nonblock pipe;
+    Lwt_pipe.close_nonblock pl_pipe;
     Lwt_pipe.close_nonblock bus;
-    Lwt.return out
+    Lwt_pipe.close ev_pipe >|= fun () -> out
   in
   Lwt.async (fun () ->
       manage' () >|= function

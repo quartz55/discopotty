@@ -178,31 +178,32 @@ module Ffmpeg = struct
                 L.trace (fun m -> m "parsing frame");
                 let frame = parse_frame () in
                 if Lwt.is_sleeping p_p then Lwt.wakeup_later u_p (Ok p);
-                Lwt_pipe.write_exn p frame >>= poll'
+                Lwt_pipe.write p frame >>= fun ok ->
+                if ok then poll' () else proc#close >|= ignore
             | Error End_of_file -> Lwt.return_unit
             | Error exn -> Lwt.fail exn
           in
           let open Lwt.Syntax in
-          ((poll' () >>= fun () -> proc#status) >>= function
-           | Unix.WEXITED 0 ->
-               if Lwt.is_sleeping p_p then
-                 Lwt_result.fail (`Msg "0 byte stream?")
-               else Lwt_result.return ()
-           | WEXITED n ->
-               L.error (fun m ->
-                   m "got non 0 status code for ffmpeg (status=%d)" n);
-               let+ logs = logs () in
-               L.error (fun m -> m "logs:@.%s" logs);
-               Error
-                 (`Msg
-                   (Printf.sprintf
-                      "got non 0 status code for ffmpeg (status=%d)\n%s" n logs))
-           | WSIGNALED n | WSTOPPED n ->
-               let+ logs = logs () in
-               L.error (fun m ->
-                   m "ffmpeg stopped or signaled with code=%d\n%s" n logs);
-               assert false)
-          >|= fun res ->
+          let* status = poll' () >>= fun () -> proc#status in
+          let+ res =
+            match status with
+            | Unix.WEXITED 0 ->
+                if Lwt.is_sleeping p_p then
+                  Lwt_result.fail (`Msg "0 byte stream?")
+                else Lwt_result.return ()
+            | WEXITED n ->
+                L.error (fun m ->
+                    m "got non 0 status code for ffmpeg (status=%d)" n);
+                let+ logs = logs () in
+                L.error (fun m -> m "logs:@.%s" logs);
+                Error
+                  (`Msg
+                    (Printf.sprintf
+                       "got non 0 status code for ffmpeg (status=%d)\n%s" n logs))
+            | WSIGNALED n | WSTOPPED n ->
+                L.warn (fun m -> m "ffmpeg process was closed with code=%d" n);
+                Lwt_result.return ()
+          in
           match (Lwt.is_sleeping p_p, res) with
           | true, (Error _ as e) -> Lwt.wakeup_later u_p e
           | true, Ok () -> ()

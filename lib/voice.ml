@@ -32,6 +32,7 @@ module Ws = struct
   let close ~code t =
     match !t with
     | Open (tb, conn) ->
+        t := Closed;
         Token_bucket.cancel_waiting tb;
         Ws_Conn.close ~code conn
     | Closed -> ()
@@ -284,8 +285,9 @@ let create_conn uri =
             L.warn (fun m ->
                 m "voice ws session was closed: %a" Close_code.pp code);
             Lwt.async (fun () ->
-                let w = Lwt_pipe.write_exn p (`Closed code) in
-                Lwt.bind w (fun () -> Lwt_pipe.close p)))
+                Lwt_pipe.write p (`Closed code) >>= function
+                | true -> Lwt_pipe.close p
+                | false -> Lwt.return_unit))
       uri
   in
   let+ ws = p_conn in

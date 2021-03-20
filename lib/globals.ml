@@ -9,6 +9,7 @@ type bigstring = Bigstringaf.t
 module Lwt_pipe = struct
   include Lwt_pipe
 
+  (* TODO this hasn't actually been tested 🤷‍🔥 *)
   let multicast ~n p =
     assert (n > 1);
     let main = create () in

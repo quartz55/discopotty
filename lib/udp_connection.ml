@@ -123,7 +123,7 @@ type t = {
   ssrc : int;
   f : Faraday.t;
   flush_packet : unit -> unit Lwt.t;
-  flush_p : [ `Flush | `Keep_alive ] Lwt_pipe.Writer.t;
+  send_tx : [ `Flush | `Keep_alive ] Lwt_pipe.Writer.t;
 }
 
 type encryption_mode = Normal | Suffix | Lite of uint32 ref
@@ -201,7 +201,7 @@ let create ~ssrc (ip, port) =
   let local_addr = Unix.(inet_addr_of_string ip_d, port_d) in
   let f = Faraday.create (1024 * 4) in
   let writev = Faraday_lwt_unix.writev_of_fd sock in
-  let flush_p = Lwt_pipe.create () in
+  let send_tx = Lwt_pipe.create () in
   let t =
     {
       f;
@@ -209,8 +209,8 @@ let create ~ssrc (ip, port) =
       local_addr;
       discord_addr;
       ssrc;
-      flush_packet = (fun () -> Lwt_pipe.write_exn flush_p `Flush);
-      flush_p;
+      flush_packet = (fun () -> Lwt_pipe.write send_tx `Flush >|= ignore);
+      send_tx;
     }
   in
   let yield =
@@ -220,9 +220,9 @@ let create ~ssrc (ip, port) =
           Some `Keep_alive)
       |> Lwt_pipe.of_stream
     in
-    Lwt_pipe.connect ~ownership:`OutOwnsIn keep_alive flush_p;
+    Lwt_pipe.connect ~ownership:`OutOwnsIn keep_alive send_tx;
     fun f ->
-      Lwt_pipe.read flush_p >|= function
+      Lwt_pipe.read send_tx >|= function
       | Some `Keep_alive ->
           L.debug (fun m ->
               m "sending UDP keepalive packet"
@@ -250,14 +250,14 @@ let create ~ssrc (ip, port) =
         f ()
       in
       f ());
-  let+ () = Lwt_pipe.write_exn flush_p `Keep_alive in
+  let+ () = Lwt_pipe.write_exn send_tx `Keep_alive in
   t
 
-let destroy ?(drain = false) { f; sock; flush_p; _ } =
+let destroy ?(drain = false) { f; sock; send_tx; _ } =
   match Lwt_unix.state sock with
   | Lwt_unix.Opened ->
-      if drain then Faraday.drain f |> ignore |> Lwt.return
-      else Lwt_pipe.close flush_p
+      if drain then Faraday.drain f |> ignore;
+      Lwt_pipe.close send_tx
   | Closed | Aborted _ -> Lwt.return_unit
 
 let local_addr { local_addr; _ } = local_addr

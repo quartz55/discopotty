@@ -4,7 +4,8 @@
   "description": "",
   "esy": {
     "build": "dune build -p #{self.name}",
-    "buildDev": "dune build --promote-install-files --root . --only-package #{self.name}"
+    "buildDev":
+      "dune build --promote-install-files --root . --only-package #{self.name}"
   },
   "scripts": {
     "bot": "esy x discopotty",
@@ -51,16 +52,21 @@
     "@opam/ocamlformat": "0.17.0",
     "@opam/odoc": "*",
     "@opam/qcheck-alcotest": "0.17",
-    "@opam/qcheck-core": "0.17"
+    "@opam/qcheck-core": "0.17",
+    "@opam/utop": "2.7.0"
   },
   "resolutions": {
     "@opam/httpaf": "anmonteiro/httpaf:httpaf.opam#0555dde",
     "@opam/httpaf-lwt": "anmonteiro/httpaf:httpaf-lwt.opam#0555dde",
     "@opam/httpaf-lwt-unix": "anmonteiro/httpaf:httpaf-lwt-unix.opam#0555dde",
-    "@opam/piaf": "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
-    "@opam/websocketaf": "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
-    "@opam/websocketaf-lwt": "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
-    "@opam/websocketaf-lwt-unix": "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
+    "@opam/piaf":
+      "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
+    "@opam/websocketaf":
+      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+    "@opam/websocketaf-lwt":
+      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
+    "@opam/websocketaf-lwt-unix":
+      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
     "@opam/conf-pkg-config": "1.3",
     "@opam/conf-libssl": "2",
     "@opam/conf-libsodium": {
@@ -72,36 +78,18 @@
       }
     },
     "@opam/sodium": {
-      "source": "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
-      "override": {
-        "dependencies": {
-          "@opam/conf-libsodium": "*"
-        }
-      }
+      "source":
+        "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
+      "override": { "dependencies": { "@opam/conf-libsodium": "*" } }
     },
     "@discopotty/opus": "link:./vendor/opus/package.json",
     "@opam/conf-libopus": {
       "source": "link:./vendor/esy-libopus/conf-libopus.opam",
-      "override": { "dependencies": { "esy-libopus": "./vendor/esy-libopus" } }
+      "override": {
+        "dependencies": { "esy-libopus": "./vendor/esy-libopus" }
+      }
     },
     "esy-libopus": "./vendor/esy-libopus/package.json",
-    // "@opam/conf-libogg": {
-    //   "source": "link:./vendor/esy-libogg/conf-libogg.opam",
-    //   "override": {
-    //     "dependencies": {
-    //       "esy-libogg": "*"
-    //     }
-    //   }
-    // },
-    // "@opam/opus": {
-    //   "source": "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-opus/opus.opam",
-    //   "override": {
-    //     "dependencies": {
-    //       "@opam/conf-libopus": "*"
-    //     }
-    //   }
-    // },
-    // "esy-libogg": "./vendor/esy-libogg/package.json",
     "@esy-ocaml/reason": "reasonml/reason:reason.json#98e6c29",
     "relog": "quartz55/relog-native#d74d484"
   },
@@ -111,8 +99,6 @@
   },
   "author": "",
   "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/quartz55/discopotty-re/issues"
-  },
+  "bugs": { "url": "https://github.com/quartz55/discopotty-re/issues" },
   "homepage": "https://github.com/quartz55/discopotty-re#readme"
 }
