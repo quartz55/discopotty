@@ -249,9 +249,6 @@ module CTL = struct
     in
     Int32.of_int o
   
-  let arg_get1 = ptr int32_t
-  let arg_set1 = int32_t
-
   let request: type a b. ctl_fn:string -> a handle -> (a, b) t -> b result
     = fun ~ctl_fn handle req ->
     let code = _code req in
@@ -327,6 +324,13 @@ module CTL = struct
       let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
       let d = allocate int32_t 0l in
       fn handle code d |> Error.wrap (Int32.to_int !@d)
+    | Set_DTX b ->
+      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
+      fn handle code (Int32.of_int @@ Bool.to_int b) |> Error.wrap ()
+    | Get_DTX ->
+      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
+      let b = allocate int32_t 0l in
+      fn handle code b |> Error.wrap (match !@b with | 0l -> false | 1l -> true | _ -> assert false)
     | _ -> assert false
 end
 

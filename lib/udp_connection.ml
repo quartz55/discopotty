@@ -234,31 +234,41 @@ let create ~ssrc (ip, port) =
                     ]);
           Packet.Keep_alive.write ~ssrc f
       | Some `Flush -> ()
-      | None -> Faraday.close f
+      | None ->
+          L.debug (fun m -> m "closing udp socket");
+          Faraday.close f
   in
-  (* write loop *)
-  Lwt.async (fun () -> Faraday_lwt_unix.serialize f ~yield ~writev);
-  (* TODO: read loop *)
-  Lwt.async (fun () ->
-      let open Lwt.Infix in
-      let b = Bytes.create (1024 * 4) in
-      let b_len = Bytes.length b in
-      let rec f () =
-        Lwt_unix.read sock b 0 b_len >>= fun n ->
-        L.trace (fun m ->
-            m "got %d bytes from UDP (ssrc=%d) (rtcp? keepalive ack?)" n ssrc);
-        f ()
-      in
-      f ());
+  let write_worker = Faraday_lwt_unix.serialize f ~yield ~writev in
+  let read_worker =
+    let open Lwt.Infix in
+    let b = Bytes.create (1024 * 4) in
+    let b_len = Bytes.length b in
+    let rec f () =
+      if Lwt_pipe.is_closed send_tx then Lwt.return_unit
+      else
+        let r = Lwt_unix.read sock b 0 b_len >|= fun n -> `read n in
+        let t = Lwt_unix.sleep (1. /. 5.) >|= fun () -> `timeout in
+        Lwt.pick [ r; t ] >>= function
+        | `read n ->
+            L.trace (fun m ->
+                m "got %d bytes from UDP (ssrc=%d) (rtcp? keepalive ack?)" n
+                  ssrc);
+            f ()
+        | `timeout -> f ()
+    in
+    f ()
+  in
+  Lwt_pipe.keep send_tx write_worker;
+  Lwt_pipe.keep send_tx read_worker;
   let+ () = Lwt_pipe.write_exn send_tx `Keep_alive in
   t
 
-let destroy ?(drain = false) { f; sock; send_tx; _ } =
+let destroy { sock; send_tx; _ } =
   match Lwt_unix.state sock with
   | Lwt_unix.Opened ->
-      if drain then Faraday.drain f |> ignore;
-      Lwt_pipe.close send_tx
-  | Closed | Aborted _ -> Lwt.return_unit
+      L.debug (fun m -> m "closing udp serializer");
+      Lwt_pipe.close_nonblock send_tx
+  | Closed | Aborted _ -> ()
 
 let local_addr { local_addr; _ } = local_addr
 

@@ -1,4 +1,5 @@
 open Containers
+open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -140,22 +141,17 @@ module type Connection = sig
 
   type t
 
-  type frame = Close of Close_code.t | Payload of recv
-
-  type handler = t -> frame -> unit
+  and frame = Close of Close_code.t | Payload of recv
 
   val info : t -> conn_info
+
+  val stream : t -> frame Lwt_stream.t
 
   val send : t -> send -> unit
 
   val close : ?code:Close_code.t -> t -> unit
 
-  val create :
-    ?zlib:bool ->
-    ?enc:enc ->
-    handler:handler ->
-    Uri.t ->
-    (unit, Error.t) Lwt_result.t
+  val create : ?zlib:bool -> ?enc:enc -> Uri.t -> (t, Error.t) Lwt_result.t
 end
 
 module Make : functor (P : Payload.Intf) ->
@@ -177,30 +173,35 @@ functor
 
     type t = {
       info : conn_info;
-      send : send -> unit;
-      close : ?code:Close_code.t -> unit -> unit;
+      wsd : Websocketaf.Wsd.t;
+      stream : frame Lwt_stream.t;
     }
 
-    type frame = Close of Close_code.t | Payload of recv
-
-    type handler = t -> frame -> unit
+    and frame = Close of Close_code.t | Payload of recv
 
     let info { info; _ } = info
 
-    let send { send; _ } pl = send pl
+    let stream { stream; _ } = stream
 
-    let close ?code { close; _ } = close ?code ()
+    let send t (pl : send) =
+      L.debug (fun m ->
+          let pp = P.to_json pl |> Yojson.Safe.pretty_to_string in
+          m "sending payload:@.%s" pp);
+      let out = pl |> P.to_bytes in
+      let len = Bytes.length out in
+      let rec send' n =
+        match len - n with
+        | len when len > max_payload_len ->
+            Websocketaf.Wsd.send_bytes t.wsd ~kind:`Continuation out ~off:n
+              ~len:max_payload_len;
+            send' (n + max_payload_len)
+        | len -> Websocketaf.Wsd.send_bytes t.wsd ~kind:`Text out ~off:n ~len
+      in
+      send' 0
 
-    let rec _connect :
-        enc:enc ->
-        zlib:bool ->
-        ssl:bool ->
-        string ->
-        int ->
-        string ->
-        handler:handler ->
-        (unit, [> `Msg of string ]) Lwt_result.t =
-     fun ~enc ~zlib ~ssl host port resource ~handler ->
+    let close ?code t = Websocketaf.Wsd.close ?code t.wsd
+
+    let rec _connect ~enc ~zlib ~ssl host port resource =
       let open Lwt_result.Syntax in
       L.info (fun m -> m "opening socket (%s:%d) ssl=%b" host port ssl);
       let* socket = open_socket ~ssl ~port host in
@@ -230,26 +231,8 @@ functor
         | _ -> assert false
       in
       let websocket_handler wsd =
-        let send pl =
-          L.debug (fun m ->
-              let pp = P.to_json pl |> Yojson.Safe.pretty_to_string in
-              m "sending payload:@.%s" pp);
-          let out = pl |> P.to_bytes in
-          let len = Bytes.length out in
-          let rec send' n =
-            match len - n with
-            | len when len > max_payload_len ->
-                Websocketaf.Wsd.send_bytes wsd ~kind:`Continuation out ~off:n
-                  ~len:max_payload_len;
-                send' (n + max_payload_len)
-            | len -> Websocketaf.Wsd.send_bytes wsd ~kind:`Text out ~off:n ~len
-          in
-          send' 0
-        in
-        let close ?code () = Websocketaf.Wsd.close ?code wsd in
-        Lwt.wakeup_later u (Ok ());
-
-        let h_frame = handler { send; close; info = conn_info } in
+        let stream, push = Lwt_stream.create () in
+        Lwt.wakeup_later u (Ok { info = conn_info; wsd; stream });
         let frame ~opcode ~is_fin bs ~off ~len =
           L.debug (fun m ->
               m "frame"
@@ -268,7 +251,8 @@ functor
               in
               L.warn (fun m ->
                   m "got close frame with code=%a" Close_code.pp close_code);
-              h_frame (Close close_code)
+              push (Some (Close close_code));
+              push None
           | `Binary | `Text ->
               (* TODO zlib transport compression *)
               let pl_json =
@@ -291,7 +275,7 @@ functor
                     L.warn (fun m ->
                         m "couldn't parse payload, ignoring..."
                           ~fields:F.[ str "exn" (Printexc.to_string exn) ])
-                | pl -> h_frame (Payload pl)
+                | pl -> push (Some (Payload pl))
               in
               ()
           | `Continuation ->
@@ -318,15 +302,15 @@ functor
         |> Lwt_result.catch
         |> Lwt_result.map_err (fun e -> `Exn e)
       in
-      Lwt.bind p (function
-        | Error (`Redir loc) ->
-            let host, port, ssl, resource = _uri_info (Uri.of_string loc) in
-            _connect ~enc ~zlib ~ssl host port resource ~handler
-        | Error (`Msg _) as err -> Lwt.return err
-        | Ok () -> Lwt.return (Ok ()))
+      p >>= function
+      | Error (`Redir loc) ->
+          let host, port, ssl, resource = _uri_info (Uri.of_string loc) in
+          _connect ~enc ~zlib ~ssl host port resource
+      | Error (`Msg _) as err -> Lwt.return err
+      | Ok t -> Lwt.return (Ok t)
 
-    let create ?(zlib = false) ?(enc = `json) ~handler uri =
+    let create ?(zlib = false) ?(enc = `json) uri =
       L.info (fun m -> m "connecting to gateway at '%a'" Uri.pp uri);
       let host, port, ssl, resource = _uri_info uri in
-      _connect ~enc ~zlib ~ssl host port resource ~handler
+      _connect ~enc ~zlib ~ssl host port resource
   end

@@ -225,30 +225,18 @@ let do_handshake ~token ?reconn ws pl_rx =
 
 let create_conn uri =
   let open Lwt_result.Syntax in
-  let p = Lwt_pipe.create () in
-  let p_conn, u_conn = Lwt.wait () in
-  let* () =
-    Ws_Conn.create ~zlib:false
-      ~handler:(fun ws ->
-        let ws = Ws.create ws in
-        Lwt.wakeup_later u_conn (Ok ws);
-        function
-        | Payload pl ->
-            Lwt.async (fun () ->
-                Lwt_pipe.write p (`Pl pl) >|= fun ok ->
-                if not ok then Ws.close ~code:`Normal_closure ws)
-        | Close code ->
-            L.warn (fun m ->
-                m "gateway ws session was closed: %a" Websocket.Close_code.pp
-                  code);
-            Lwt.async (fun () ->
-                Lwt_pipe.write p (`Closed code) >>= function
-                | true -> Lwt_pipe.close p
-                | false -> Lwt.return_unit))
-      uri
+  let+ conn = Ws_Conn.create ~zlib:false uri in
+  let p =
+    Lwt_pipe.of_stream (Ws_Conn.stream conn)
+    |> Lwt_pipe.Reader.map ~f:(function
+         | Ws_Conn.Payload pl -> `Pl pl
+         | Close code ->
+             L.warn (fun m ->
+                 m "gateway ws session was closed: %a" Websocket.Close_code.pp
+                   code);
+             `Closed code)
   in
-  let+ ws = p_conn in
-  ( ws,
+  ( Ws.create conn,
     (p
       : [ `Pl of Pl.recv | `Closed of Websocket.Close_code.t ] Lwt_pipe.Reader.t)
   )
@@ -391,7 +379,8 @@ let _send_exn { pl_tx; _ } pl = Lwt_pipe.write_exn pl_tx pl
 let send_presence_update t ?since ~afk status =
   _send_exn t (Pl.make_presence_update ?since ~afk status)
 
-let send_voice_state_update t ?channel_id ~self_mute ~self_deaf guild_id =
+let send_voice_state_update t ?channel_id ?(self_mute = false)
+    ?(self_deaf = false) guild_id =
   _send_exn t
     (Pl.make_voice_state_update ?channel_id ~self_mute ~self_deaf guild_id)
 

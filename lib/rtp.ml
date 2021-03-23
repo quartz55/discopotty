@@ -9,7 +9,7 @@ let _FRAME_LEN = 20
 let _FRAME_SIZE = _SAMPLE_RATE / 1000 * _FRAME_LEN
 
 (** Maximum packet size for a voice packet.
- Set a safe amount below the Ethernet MTU to avoid fragmentation/rejection. *)
+ Set below Ethernet MTU to avoid fragmentation/rejection. *)
 let _VOICE_PACKET_MAX = 1460
 
 (* https://tools.ietf.org/html/rfc7587#section-4.2 *)
@@ -56,4 +56,4 @@ let send_packet t bs =
   t.sync <- Sync.tick t.sync;
   Udp_connection.send_voice_packet ~crypt:t.crypt ~seq ~ts ~audio:bs t.udp
 
-let destroy ?drain t = Udp_connection.destroy ?drain t.udp
+let destroy t = Udp_connection.destroy t.udp

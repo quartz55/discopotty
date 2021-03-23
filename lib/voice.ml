@@ -270,28 +270,19 @@ let do_handshake ~server_id ~user_id ~session_id ~token ?session ws pl_pipe =
 
 let create_conn uri =
   let open Lwt_result.Syntax in
-  let p = Lwt_pipe.create () in
-  let p_conn, u_conn = Lwt.wait () in
-  let* () =
-    Ws_Conn.create ~zlib:false
-      ~handler:(fun ws ->
-        let ws = Ws.create ws in
-        Lwt.wakeup_later u_conn (Ok ws);
-        function
-        | Payload pl ->
-            Lwt.async (fun () -> Lwt_pipe.write p (`Pl pl) >|= ignore)
-        | Close code ->
-            let code = Close_code.of_close_code_exn code in
-            L.warn (fun m ->
-                m "voice ws session was closed: %a" Close_code.pp code);
-            Lwt.async (fun () ->
-                Lwt_pipe.write p (`Closed code) >>= function
-                | true -> Lwt_pipe.close p
-                | false -> Lwt.return_unit))
-      uri
+  let+ conn = Ws_Conn.create ~zlib:false uri in
+  let p =
+    Lwt_pipe.of_stream (Ws_Conn.stream conn)
+    |> Lwt_pipe.Reader.map ~f:(function
+         | Ws_Conn.Payload pl -> `Pl pl
+         | Close code ->
+             let code = Close_code.of_close_code_exn code in
+             L.warn (fun m ->
+                 m "voice ws session was closed: %a" Close_code.pp code);
+             `Closed code)
   in
-  let+ ws = p_conn in
-  (ws, (p : [ `Pl of Pl.recv | `Closed of Close_code.t ] Lwt_pipe.Reader.t))
+  ( Ws.create conn,
+    (p : [ `Pl of Pl.recv | `Closed of Close_code.t ] Lwt_pipe.Reader.t) )
 
 let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
     ~user_id ~session_id ~token endpoint =
@@ -378,14 +369,13 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
           L.error (fun m ->
               m "session closed with unrecoverable close code: %a" Close_code.pp
                 code);
-          let* () = Rtp.destroy session.rtp in
           Lwt.return
             (Error (`Discord (Format.asprintf "%a" Close_code.pp code)))
       | `Dc ->
-          let* () = Lwt_pipe.close rtp_writer in
-          let* () = Rtp.destroy session.rtp in
+          Lwt_pipe.close_nonblock rtp_writer;
+          Rtp.destroy session.rtp;
           Ws.close ~code:`Normal_closure ws;
-          let* () = Lwt_pipe.close pipe in
+          Lwt_pipe.close_nonblock pipe;
           Lwt_pipe.close_nonblock ws_writer;
           Lwt_pipe.close_nonblock bus;
           Lwt.wakeup_later u_dc'ed ();
@@ -415,14 +405,15 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
           L.debug (fun m -> m "ignoring speaking/resumed/clientdisconnect");
           poll' ()
     in
-    Lwt.bind (poll' ()) (fun e ->
-        hb.cancel ();
-        Ws.close ~code:`Going_away ws;
-        Lwt_pipe.close_nonblock pipe;
-        Lwt_pipe.close_nonblock ws_writer;
-        Lwt_pipe.close_nonblock rtp_writer;
-        Lwt_pipe.close_nonblock bus;
-        Rtp.destroy ~drain:true session.rtp >|= fun () -> e)
+    poll' () >|= fun out ->
+    hb.cancel ();
+    Lwt_pipe.close_nonblock rtp_writer;
+    Rtp.destroy session.rtp;
+    Ws.close ~code:`Going_away ws;
+    Lwt_pipe.close_nonblock pipe;
+    Lwt_pipe.close_nonblock ws_writer;
+    Lwt_pipe.close_nonblock bus;
+    out
   in
   Lwt.async (fun () ->
       manage' ()

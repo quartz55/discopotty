@@ -1,6 +1,8 @@
 type t =
   [ `Discord of string | `Http of Piaf.Error.t | `Exn of exn | `Msg of string ]
 
+type nonrec 'a result = ('a, t) result
+
 let of_http e = `Http e
 
 let to_string = function

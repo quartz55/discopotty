@@ -1,5 +1,8 @@
 #+TITLE: discopotty dev notebook
 
+Link for base permissions invite:
+[[https://discord.com/oauth2/authorize?client_id=235863322304577537&permissions=2184441408&scope=bot][boop]]
+
 * DOING Gateway Protocol
 
 ** DONE Websocket connection handling

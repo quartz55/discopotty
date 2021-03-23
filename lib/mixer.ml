@@ -9,66 +9,156 @@ type pcm_s16_frame =
 type pcm_f32_frame =
   (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t
 
-type t = { evloop_chan : evloop_msg Lwt_pipe.Writer.t }
+type silence_stream = bigstring Lwt_pipe.Reader.t
 
-and evloop_msg =
-  | Detach of bool
-  | Attach of Voice.t
-  | Pause
-  | Resume
-  | Stop
-  | Play of pcm_s16_frame Lwt_pipe.Reader.t
+module Driver = struct
+  type t = {
+    mutable state : state;
+    mutable silence : silence_stream option;
+    mutable dead : bool;
+  }
 
-let create () =
+  and state = Idle | Playing of stream
+
+  and stream = { waker : waker; rx : bigstring Lwt_pipe.Reader.t }
+
+  and waker = unit Lwt.t * unit Lwt.u
+
+  let waker : unit -> waker = Lwt.task
+
+  let make_silence ?n () = Audio_stream.n_silence_pipe ?n ()
+
+  let create () =
+    { state = Idle; silence = Some (make_silence ~n:20 ()); dead = false }
+
+  let now () = Mtime_clock.elapsed_ns ()
+
+  let destroy_active t =
+    match t.state with
+    | Playing s ->
+        Lwt_pipe.close_nonblock s.rx;
+        Lwt.cancel (fst s.waker);
+        t.state <- Idle
+    | Idle -> ()
+
+  let stop = destroy_active
+
+  let play ~s t =
+    match t.state with
+    | Playing _ ->
+        stop t;
+        t.silence <- Some (make_silence ());
+        t.state <- Playing s
+    | Idle -> t.state <- Playing s
+
+  let destroy t = if not t.dead then t.dead <- true
+
+  let run ~yield ~play ~stop t =
+    let rec exhaust ?(i = 0) p =
+      Lwt_pipe.read p >>= function
+      | Some frame ->
+          play frame >>= fun ok ->
+          if ok then exhaust ~i:(i + 1) p
+          else if i = 0 then failwith "need to send at least 1 frame"
+          else Lwt.return (`Yield i)
+      | None -> Lwt.return (`Closed i)
+    in
+    let framelen = float Rtp._FRAME_LEN /. 1e3 in
+    let schedule_next ?drift ?(frames = 1) () =
+      let timeout = float frames *. framelen in
+      let with_drift d =
+        let d = Lazy.force d in
+        let delta = Int64.(now () - d |> to_float) /. 1e9 in
+        timeout -. Float.min delta timeout
+      in
+      let timeout =
+        Option.map with_drift drift |> Option.get_or ~default:timeout
+      in
+      L.trace (fun m ->
+          m "sent %d frames, next tick in %f seconds" frames timeout);
+      Lwt_unix.sleep timeout >|= fun () -> `Tick
+    in
+    let rec yield_till tick =
+      let y = yield t >|= fun () -> if t.dead then `Dead else `Yield in
+      Lwt.choose [ tick; y ] >>= function
+      | `Dead ->
+          Lwt.cancel tick;
+          Lwt.return_unit
+      | `Yield -> yield_till tick
+      | `Tick ->
+          Lwt.cancel y;
+          Lwt.return_unit
+    in
+    let rec f' ?(drift = lazy (now ())) ?(i = 0) () =
+      match (t.silence, t.state) with
+      | _ when t.dead ->
+          destroy_active t;
+          Lwt.return_unit
+      | Some s, st -> (
+          exhaust s >>= function
+          | `Closed n ->
+              t.silence <- None;
+              (match st with Idle -> stop () | _ -> Lwt.return_unit)
+              >>= f' ~drift ~i:(i + n)
+          | `Yield n ->
+              let frames = i + n in
+              yield_till (schedule_next ~drift ~frames ()) >>= fun () -> f' ())
+      | None, Idle -> yield t >>= fun () -> f' ()
+      | None, Playing s -> (
+          exhaust s.rx >>= function
+          | `Closed n ->
+              t.silence <- Some (make_silence ());
+              t.state <- Idle;
+              Lwt.wakeup_later (snd s.waker) ();
+              f' ~drift ~i:(i + n) ()
+          | `Yield n ->
+              let frames = i + n in
+              yield_till (schedule_next ~drift ~frames ()) >>= fun () -> f' ())
+    in
+    f' ()
+end
+
+type t = { evloop_tx : evloop_msg Lwt_pipe.Writer.t }
+
+and evloop_msg = Stop | Play of pcm_s16_frame Lwt_pipe.Reader.t * Driver.waker
+
+let create_opus_encoder ?(frametype = `s16) () =
+  let open Opus in
+  let open Result.Infix in
+  let rec set_ctls ~l enc =
+    match l with
+    | ctl :: l -> Encoder.ctl enc ctl >>= fun () -> set_ctls ~l enc
+    | [] -> Ok enc
+  in
+  Encoder.create ~samplerate:Rtp._SAMPLE_RATE ~channels:`stereo
+    ~application:Audio ()
+  >>= (fun enc ->
+        let shared =
+          CTL.
+            [
+              Set_signal `music;
+              Set_bitrate `max;
+              Set_complexity 10;
+              Set_packet_loss_perc 5;
+              Set_complexity 10;
+              Set_inband_FEC true;
+              Set_DTX false;
+            ]
+        in
+        let ctls =
+          match frametype with
+          | `s16 -> CTL.(Set_LSB_depth 16) :: shared
+          | `f32 -> CTL.(Set_LSB_depth 24) :: shared
+        in
+        set_ctls ~l:ctls enc)
+  |> Result.map_err (fun e ->
+         `Msg (Printf.sprintf "opus error: %s" (Opus.Error.to_string e)))
+
+let create ?(burst = 15) voice =
+  let ( let+ ) = Result.( let+ ) in
   let chan = Lwt_pipe.create () in
-  let tick () = Lwt_pipe.write chan `Tick >|= ignore in
-  let frames_per_tick = 15 in
-  let schedule_tick ?drift ?(n = 1) ?(timeout = float Rtp._FRAME_LEN /. 1e3) ()
-      =
-    Lwt.async (fun () ->
-        let timeout = float n *. timeout in
-        let timeout =
-          Option.map
-            (fun d ->
-              timeout -. (Int64.(Mtime_clock.now_ns () - d |> to_float) /. 1e9))
-            drift
-          |> Option.get_or ~default:timeout
-        in
-        L.trace (fun m -> m "sent %d frames, next tick in %f seconds" n timeout);
-        Lwt_unix.sleep timeout >>= tick)
-  in
-  let send_frames frames_p voice =
-    match Lwt_pipe.is_closed frames_p with
-    | true -> Lwt.return_none
-    | false ->
-        let rec f' = function
-          | 0 -> Lwt.return_some frames_per_tick
-          | n -> (
-              Lwt_pipe.read frames_p >>= function
-              | Some bs -> Voice.send_rtp voice bs >>= fun () -> f' (n - 1)
-              | None -> Lwt.return_some (frames_per_tick - n))
-        in
-        Voice.start_speaking voice >>= fun () -> f' frames_per_tick
-  in
-  let evloop_chan = Lwt_pipe.Writer.map ~f:(fun msg -> `Req msg) chan in
-  let voice = ref None in
-  let stream = ref `Idle in
-  let encoder =
-    let open Opus in
-    let open Result.Infix in
-    Encoder.create ~samplerate:Rtp._SAMPLE_RATE ~channels:`stereo
-      ~application:Audio ()
-    >>= (fun enc ->
-          Encoder.ctl enc (Set_signal `music) >>= fun () ->
-          Encoder.ctl enc (Set_bitrate `max) >>= fun () ->
-          Encoder.ctl enc (Set_complexity 10) >>= fun () ->
-          Encoder.ctl enc (Set_LSB_depth 16) >>= fun () ->
-          Encoder.ctl enc (Set_packet_loss_perc 5) >>= fun () ->
-          Encoder.ctl enc (Set_complexity 10) >>= fun () ->
-          Encoder.ctl enc (Set_inband_FEC true) >|= fun () -> enc)
-    |> Result.get_lazy (fun e ->
-           failwith @@ "opus error: " ^ Opus.Error.to_string e)
-  in
+  let evloop_tx = Lwt_pipe.Writer.map ~f:(fun msg -> `Req msg) chan in
+  let+ encoder = create_opus_encoder () in
   let encode =
     let pkt_buf = Bigstringaf.create Rtp._VOICE_PACKET_MAX in
     fun buf ->
@@ -81,59 +171,38 @@ let create () =
       | Ok (`Packet p) -> Some p
       | Error e -> failwith ("opus error: " ^ Opus.Error.to_string e)
   in
-  let last_tick = ref @@ Mtime_clock.elapsed_ns () in
-  let rec evloop () =
-    Lwt_pipe.read chan >|= Option.get_exn >>= function
-    | `Tick ->
-        let t = Mtime_clock.elapsed_ns () in
-        L.trace (fun m -> m "time since last tick=%Ldns" Int64.(t - !last_tick));
-        last_tick := t;
-        !voice
-        |> Option.map (fun voice ->
-               let t1 = Mtime_clock.now_ns () in
-               match !stream with
-               | `Idle -> evloop ()
-               | `Silence p -> (
-                   send_frames p voice >>= function
-                   | Some n ->
-                       schedule_tick ~drift:t1 ~n ();
-                       evloop ()
-                   | None ->
-                       stream := `Idle;
-                       Voice.stop_speaking voice >>= evloop)
-               | `Audio pcm -> (
-                   let enc = Lwt_pipe.Reader.filter_map ~f:encode pcm in
-                   send_frames enc voice >>= function
-                   | Some n ->
-                       Lwt_pipe.close_nonblock enc;
-                       schedule_tick ~drift:t1 ~n ();
-                       evloop ()
-                   | None ->
-                       stream := `Silence (Audio_stream.n_silence_pipe ());
-                       Lwt_pipe.close_nonblock enc;
-                       Lwt.async tick;
-                       evloop ()))
-        |> Option.get_lazy evloop
-    | `Req (Attach n_voice) ->
-        voice := Some n_voice;
-        evloop ()
-    | `Req (Play audio) ->
-        let () =
-          match !stream with
-          | `Silence p -> Lwt_pipe.close_nonblock p
-          | `Audio p -> Lwt_pipe.close_nonblock p
-          | `Idle -> Lwt.async tick
-        in
-        stream := `Audio audio;
-        evloop ()
-    | `Req _msg -> evloop ()
-    | `Poison -> Lwt.return_unit
+  let driver = Driver.create () in
+  let yield driver =
+    Lwt.wrap_in_cancelable (Lwt_pipe.read chan)
+    >|= Option.get_or ~default:`Poison
+    >|= function
+    | `Req (Play (s, waker)) ->
+        let s = Lwt_pipe.Reader.filter_map ~f:encode s in
+        Driver.play driver ~s:{ waker; rx = s }
+    | `Req Stop -> Driver.stop driver
+    | `Poison -> Driver.destroy driver
   in
-  let f = evloop () in
+  let curr = ref 0 in
+  let play frame =
+    if !curr < burst then (
+      Voice.start_speaking voice >>= fun () ->
+      Voice.send_rtp voice frame >|= fun () ->
+      incr curr;
+      true)
+    else (
+      curr := 0;
+      Lwt.return false)
+  in
+  let stop () = Voice.stop_speaking voice in
+  let f = Driver.run ~yield ~play ~stop driver in
   Lwt_pipe.keep chan f;
+  Lwt_pipe.link_close chan ~after:evloop_tx;
   Lwt.on_termination f (fun () -> Lwt_pipe.close_nonblock chan);
-  { evloop_chan }
+  { evloop_tx }
 
-let attach t voice = Lwt_pipe.write_exn t.evloop_chan (Attach voice)
+let play ?k t stream =
+  let ((wp, _) as waker) = Driver.waker () in
+  let () = match k with Some f -> Lwt.on_success wp f | None -> () in
+  Lwt_pipe.write_exn t.evloop_tx (Play (stream, waker))
 
-let play t stream = Lwt_pipe.write_exn t.evloop_chan (Play stream)
+let destroy t = Lwt_pipe.close_nonblock t.evloop_tx

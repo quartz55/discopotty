@@ -9,8 +9,10 @@ module SfMap = Map.Make (Models.Snowflake)
 type t = {
   session : Session.t;
   mutable events : Events.t Lwt_stream.t;
-  mutable voice_sessions : (snowflake * Voice.t) SfMap.t;
+  mutable voice_sessions : voice_session SfMap.t;
 }
+
+and voice_session = { channel_id : snowflake; conn : Voice.t; mixer : Mixer.t }
 
 let get_gateway_url http =
   let api () =
@@ -47,7 +49,7 @@ let connect ?http token =
 
 let disconnect t =
   SfMap.to_seq t.voice_sessions
-  |> Seq.map (fun (_, (_, vc)) -> Voice.disconnect vc)
+  |> Seq.map (fun (_, { conn; _ }) -> Voice.disconnect conn)
   |> Seq.to_list |> Lwt.join
   >>= fun () ->
   t.voice_sessions <- SfMap.empty;
@@ -62,8 +64,8 @@ let _fork_events t = Lwt_stream.clone t.events |> Lwt_pipe.of_stream
 let leave_voice ~guild_id ({ session; voice_sessions; _ } as t) =
   let open Lwt.Infix in
   match SfMap.get guild_id voice_sessions with
-  | Some (_, vs) ->
-      Voice.disconnect vs >>= fun () ->
+  | Some vs ->
+      Voice.disconnect vs.conn >>= fun () ->
       t.voice_sessions <- SfMap.remove guild_id voice_sessions;
       Session.send_voice_state_update session ~self_mute:true ~self_deaf:true
         guild_id
@@ -119,35 +121,46 @@ let join_voice ~guild_id ~channel_id ({ session; _ } as t) =
     let* st, srv =
       Lwt.pick
         [
-          Lwt_unix.sleep 5. |> Lwt.map (Fun.const `Timeout);
+          Lwt_unix.sleep 5. |> Lwt.map (fun () -> `Timeout);
           wait_for_updates |> Lwt.map (fun o -> `Ok o);
         ]
       |> Lwt.map (function
            | `Ok o -> Ok o
            | `Timeout -> Error (`Discord "timed out waiting for update events"))
     in
-    Voice.create
-      ~on_destroy:(fun _ ->
-        t.voice_sessions <- SfMap.remove guild_id t.voice_sessions)
-      ~server_id:guild_id ~user_id:user.id ~session_id:st.session_id
-      ~token:srv.token srv.endpoint
+    let cleanup _ =
+      L.warn (fun m -> m "cleanup");
+      match SfMap.get guild_id t.voice_sessions with
+      | Some { mixer; _ } ->
+          Mixer.destroy mixer;
+          t.voice_sessions <- SfMap.remove guild_id t.voice_sessions
+      | None -> ()
+    in
+    Voice.create ~on_destroy:cleanup ~server_id:guild_id ~user_id:user.id
+      ~session_id:st.session_id ~token:srv.token srv.endpoint
   in
   let open Lwt_result.Syntax in
-  let+ vc =
-    match SfMap.get guild_id t.voice_sessions with
-    | Some (cid, vc) when Models.Snowflake.(cid = channel_id) ->
-        L.info (fun m ->
-            m "there an active voice connection for channel '%Ld' already" cid);
-        Lwt.return (Ok vc)
-    | Some _ ->
-        L.info (fun m ->
-            m "already active voice session for guild %Ld, leaving..." guild_id);
-        let* () = leave_voice ~guild_id t |> Lwt_result.ok in
-        join ()
-    | None -> join ()
-  in
-  t.voice_sessions <- SfMap.add guild_id (channel_id, vc) t.voice_sessions;
-  vc
+  match SfMap.get guild_id t.voice_sessions with
+  | Some vs when Models.Snowflake.(vs.channel_id = channel_id) ->
+      L.info (fun m ->
+          m "there an active voice connection for channel '%Ld' already"
+            vs.channel_id);
+      Lwt_result.return vs
+  | Some _vs ->
+      L.info (fun m ->
+          m "already active voice session for guild %Ld, switching channel..."
+            guild_id);
+      let* conn = join () in
+      let+ mixer = Mixer.create conn |> Lwt_result.lift in
+      let vs = { conn; channel_id; mixer } in
+      t.voice_sessions <- SfMap.add guild_id vs t.voice_sessions;
+      vs
+  | None ->
+      let* conn = join () in
+      let+ mixer = Mixer.create conn |> Lwt_result.lift in
+      let vs = { conn; channel_id; mixer } in
+      t.voice_sessions <- SfMap.add guild_id vs t.voice_sessions;
+      vs
 
 let get_voice ~guild_id { voice_sessions; _ } =
   SfMap.get guild_id voice_sessions

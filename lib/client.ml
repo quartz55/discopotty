@@ -3,7 +3,9 @@ open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
-type t = { http : Http.t; gw : Gateway.t; mixer : Mixer.t }
+module SfMap = Map.Make (Models.Snowflake)
+
+type t = { http : Http.t; gw : Gateway.t }
 
 type create_msg = { content : string; nonce : string; tts : bool }
 [@@deriving yojson]
@@ -29,9 +31,9 @@ let join_voice ~guild_id ~channel_id { gw; _ } =
                m "couldn't join voice channel '%Ld' on guild '%Ld: %s"
                  channel_id guild_id (Error.to_string e)))
 
-let play_audio_stream ~guild_id stream { gw; mixer; _ } =
+let play_audio_stream ~guild_id stream { gw; _ } =
   match Gateway.get_voice ~guild_id gw with
-  | Some (_, vc) -> Mixer.attach mixer vc >>= fun () -> Mixer.play mixer stream
+  | Some vs -> Mixer.play vs.mixer stream >|= ignore
   | None -> Lwt.return_unit
 
 let disconnect { gw; _ } = Gateway.disconnect gw
@@ -42,7 +44,7 @@ let create ~handler token =
   let* http = Http.create token in
   L.info (fun m -> m "connecting to gateway");
   let* gw = Gateway.connect ~http token in
-  let t = { http; gw; mixer = Mixer.create () } in
+  let t = { http; gw } in
   Gateway.events gw
   |> Lwt_pipe.Reader.iter_s ~f:(fun ev -> handler t ev)
   |> Lwt_result.ok
