@@ -7,16 +7,23 @@
   discord_models
   containers
   containers-data
+  stdint
   relog.lib
   uri
   lwt
   lwt.unix
   lwt-pipe
   bitstring
+  angstrom
+  angstrom-lwt-unix
   yojson
   mtime
   mtime.clock.os
+  hxd.core
+  hxd.string
   piaf
+  sodium
+  opus
   websocketaf
   websocketaf-lwt-unix
   httpaf-lwt-unix))

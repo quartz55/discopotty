@@ -4,13 +4,17 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
+    nix-wrangle-pkg = { url = "github:timbertson/nix-wrangle"; flake = false; };
+    opam2nix-pkg = { url = "github:timbertson/opam2nix"; flake = false; };
   };
 
-  outputs = { self, nixpkgs, utils }:
+  outputs = { self, nixpkgs, utils, nix-wrangle-pkg, opam2nix-pkg }:
     utils.lib.eachDefaultSystem (
       system:
         let
-          pkgs = nixpkgs.legacyPackages."${system}";
+          pkgs = import nixpkgs { inherit system; };
+          # nix-wrangle = import nix-wrangle-pkg { pkgs = pkgs; };
+          # opam2nix = import opam2nix-pkg { inherit pkgs; inherit nix-wrangle; };
           # some symlink/relative path shenanigans happening 🤷
           esy = pkgs.writeShellScriptBin "esy" "${pkgs.nodePackages.esy}/lib/node_modules/.bin/esy $@";
         in
@@ -30,13 +34,12 @@
             };
             defaultApp = apps.discopotty;
             devShell = pkgs.mkShell {
+              nativeBuildInputs = with pkgs; [ pkg-config ];
               buildInputs = with pkgs; [
-                pkg-config
-                libsodium
                 esy
-                # ocamlformat
-                # ocamlPackages.ocaml-lsp
-                # ocamlPackages.dune_2
+                ffmpeg
+                youtube-dl
+                opam
               ];
             };
           }

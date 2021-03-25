@@ -1,0 +1,38 @@
+{
+  "version": "1.0.18123",
+  "source": "https://github.com/jedisct1/libsodium/releases/download/1.0.18-RELEASE/libsodium-1.0.18.tar.gz#795b73e3f92a362fabee238a71735579bf46bb97",
+  "override": {
+    "buildsInSource": true,
+    "build": [
+      [
+        "./configure",
+        "--disable-debug",
+        "--disable-dependency-tracking",
+        "--prefix=$cur__install"
+      ],
+      [
+        "make",
+        "-j4"
+      ]
+    ],
+    "install": "make install",
+    "exportedEnv": {
+      "PKG_CONFIG_PATH": {
+        "val": "#{self.lib / 'pkgconfig' }:$PKG_CONFIG_PATH",
+        "scope": "global"
+      },
+      "SODIUM_INCLUDE_PATH": {
+        "val": "#{self.install / 'include'}",
+        "scope": "global"
+      },
+      "SODIUM_LIB_PATH": {
+        "val": "#{self.lib}",
+        "scope": "global"
+      },
+      "LD_LIBRARY_PATH": {
+        "val": "#{self.lib : $LD_LIBRARY_PATH}",
+        "scope": "global"
+      }
+    }
+  }
+}

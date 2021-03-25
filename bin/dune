@@ -1,4 +1,6 @@
 (executable
- (name discopotty)
- (public_name discopotty)
- (libraries discord containers toml relog.lib angstrom))
+ (name sine)
+ (public_name sine_gen)
+ (modules sine)
+ (package discopotty)
+ (libraries discord containers))

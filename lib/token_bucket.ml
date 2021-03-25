@@ -11,7 +11,7 @@ type t = {
   waiters : waiter CCDeque.t;
 }
 
-and waiter = Waiter of int64 * unit Lwt.u
+and waiter = Waiter of int64 * unit Lwt.u * unit Lwt.t
 
 let check_capacity ~n { capacity; _ } =
   if n > capacity then
@@ -64,7 +64,7 @@ let try_take ?(n = 1) t =
 let attend_waiters t =
   let rec next' () =
     match CCDeque.peek_front_opt t.waiters with
-    | Some (Waiter (n, u)) ->
+    | Some (Waiter (n, u, _)) ->
         if try_take_ns_unsafe ~n t then (
           CCDeque.remove_front t.waiters;
           Lwt.wakeup_later u ();
@@ -81,8 +81,8 @@ let take ?(n = 1) t =
   check_capacity ~n t;
   let n_ns = Int64.(of_int n * t.ns_per_token) in
   let enqueue' () =
-    let p, u = Lwt.wait () in
-    CCDeque.push_back t.waiters (Waiter (n_ns, u));
+    let p, u = Lwt.task () in
+    CCDeque.push_back t.waiters (Waiter (n_ns, u, p));
     p
   in
   match CCDeque.is_empty t.waiters with
@@ -97,3 +97,13 @@ let take ?(n = 1) t =
 let take_then ~f ?n t = take ?n t |> Lwt.map (fun () -> f ())
 
 let wrap_take ~f t ?(n = 1) () = Lwt.bind (take ~n t) (fun () -> f)
+
+let cancel_waiting t =
+  let rec f' () =
+    match CCDeque.take_front_opt t.waiters with
+    | Some (Waiter (_, _, p)) ->
+        Lwt.cancel p;
+        f' ()
+    | None -> ()
+  in
+  f' ()

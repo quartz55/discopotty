@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "nix-wrangle-pkg": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1606447617,
+        "narHash": "sha256-yHejSB3cZbHyBgMiiu0BweKqimN0KVosBmjSY9mjT0E=",
+        "owner": "timbertson",
+        "repo": "nix-wrangle",
+        "rev": "25625d48f91785715dc62d7d90e44777839fa03d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "timbertson",
+        "repo": "nix-wrangle",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1613343273,
@@ -16,9 +32,27 @@
         "type": "github"
       }
     },
+    "opam2nix-pkg": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1614045149,
+        "narHash": "sha256-4SJSfK6vRGvQvTFfy3Jgg8u2rGHsya0ee0ziCIvhxew=",
+        "owner": "timbertson",
+        "repo": "opam2nix",
+        "rev": "d1d4cb15131bf45c9402aeff7df05dc78a92add7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "timbertson",
+        "repo": "opam2nix",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
+        "nix-wrangle-pkg": "nix-wrangle-pkg",
         "nixpkgs": "nixpkgs",
+        "opam2nix-pkg": "opam2nix-pkg",
         "utils": "utils"
       }
     },

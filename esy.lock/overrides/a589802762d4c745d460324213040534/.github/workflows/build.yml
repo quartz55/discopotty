@@ -1,0 +1,53 @@
+name: esy
+
+on: [push, pull_request]
+
+jobs:
+  native:
+    name: Build for Native
+
+    strategy:
+      matrix:
+        system: [ubuntu, macos]
+
+    runs-on: ${{ matrix.system }}-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - uses: actions/setup-node@v2-beta
+        with:
+          node-version: 14
+
+      - name: Install esy
+        run: npm install -g esy
+
+      - name: Create esy wrapper
+        run: |
+          echo '{
+            "name": "build-sodium",
+            "dependencies": {
+              "@opam/conf-libsodium": "*",
+              "@opam/sodium": "*"
+            },
+            "resolutions": {
+              "@opam/conf-libsodium": {
+                "source": "./libsodium.opam",
+                "override": {
+                  "dependencies": {
+                    "esy-libsodium": "github:EduardoRFS/esy-libsodium#'"${GITHUB_SHA}"'"
+                  }
+                }
+              },
+              "@opam/sodium": "github:EduardoRFS/ocaml-sodium:sodium.json#d3f147594c0bd374c88d07d0274230770c40cc7d"
+            }
+          }' > build.json
+
+      - name: Generate esy lock
+        run: esy @build solve
+
+      - uses: esy/github-action@master
+        with:
+          manifest: ./build.json
+          cache-key: ${{ hashFiles('esy.lock/index.json') }}

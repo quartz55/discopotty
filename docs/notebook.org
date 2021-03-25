@@ -1,5 +1,8 @@
 #+TITLE: discopotty dev notebook
 
+Link for base permissions invite:
+[[https://discord.com/oauth2/authorize?client_id=235863322304577537&permissions=2184441408&scope=bot][boop]]
+
 * DOING Gateway Protocol
 
 ** DONE Websocket connection handling
@@ -8,8 +11,7 @@
 Reasoning about idempotent handling of reconnections is,
 how should I put it, /*hard*/ ...
 *** DOING Find a way to actually test this
-...that doesn't involve just waiting for it
-to /(eventually)/ crash...
+...that doesn't involve just waiting for it to /(eventually)/ crash...
 
 ** DONE Refactor Session
 It needs to be self-managed (to handle automatic reconnections)
@@ -25,21 +27,59 @@ this limit are immediately disconnected from the Gateway.
 
 Don't really know what this means, but I'll stick with 2 events per second :p
 
+** DONE Refine Session
+Take some inspiration from ~voice.ml~
+
+*** DONE Investigate EOF reason in websockets
+WebsocketAF was the issue: fixed parser buffer size of 4kb
+(when =GUILD_READY= payloads can go well over that size)
+Submitted a PR [[https://github.com/anmonteiro/websocketaf/pull/25][here]]
+
+* TODO Sharding
+First should actually research how to do it in a worthwhile way
++(since we are essencially stuck in single-threaded mode for now)+
+
+[2021-2-23 Tue] /Nevermind: Sharding is useful if only to decrease rate limiting bottlenecks./
+
+** TODO Identify Concurrency handling
+A global lock/token bucket should suffice.
+Maybe make it a map of ~(bot token)->(token bucket)~ in case the user
+wants to run multiple different bots in a single application.
+
 -------
 
-* DOING Voice connection
-** DOING Voice Gateway
-** TODO Voice UDP
-    *** TODO Test soundbite
-    I think hardcoding some bytes in the code
-    should suffice for now
+* DONE Voice Connection
+** DONE Voice Gateway Protocol
+*** DONE IP Discovery
+** DONE Voice UDP
+*** DONE Test soundbite
 
+-------
+
+* TODO Music Player
+** TODO Replace external ffmpeg/ffprobe process with libav
+- Will this be a PITA because of all the needed codecs
+when building? /probably/
+- Is it worth it? /no/ (maybe it's actually worse given that ocaml-multicore isn't here yet 😿)
+- Is it fun? /yeah/ 😝
+
+** TODO youtube-dl support
+
+** TODO Custom ytdl-like implementation
+I reckon this is really only worth it if we do the libav thing.
+
+-------
+
+* TODO Cache layer
+Is it worth using something like [[https://github.com/mirage/irmin][Irmin]] here?
+** TODO Persistance layer
+I'm inclined towards sqlite+caqti based approach
 
 -------
 
 * DOING Error type
 Still not quite sure what the best approach is here.
-I guess time will tell, as needs come by
+I guess time will tell, as needs come by.
 /(or a good examle while looking at sources 👀)/
 
 -------
@@ -50,14 +90,18 @@ I guess time will tell, as needs come by
 
 * TODO Message builder
 Ideas list:
-- /GADT/
+- /(G)ADT/
     Later can refactor into a (G)ADT type for automatic
-    building of the other different types of message
+    building of the other different message types[fn:msg_type_ref]:
+        - [ ] Default
+        - [ ] Reply
+
+[fn:msg_type_ref] Reference: https://discord.com/developers/docs/resources/channel#message-object-message-types
+
 ** DONE Custom format handler
-Using semantic tags: ~"@{<b>bold @{<i> bold_italic@} @{<i> italic@} @{<v>code@}"~
+Using semantic tags: ~"@{<b>bold @{<i>bold_italic@}@} @{<i>italic@} @{<v>code@}"~
 ** DONE Utils
-Just a little helper to make it easier to build
-valid stylized messages
+Just a little helper to make it easier to build valid stylized messages
 
 
 ---------
@@ -69,9 +113,9 @@ Maybe too much work for what it's worth (~[@@deriving yojson]~ is ❤️)
 
 ---------
 
-* TODO Rate Limiting
-** TODO Internal tokenbucket implementation
-** TODO Sync with Discord's buckets
+* DOING Rate Limiting
+** DONE Internal token bucket implementation
+** TODO HTTP
 As per [[https://discord.com/developers/docs/topics/rate-limits][the docs]],
 these are the headers:
 
@@ -109,16 +153,7 @@ these are the headers:
     (non-inclusive of major parameters in the route path)
 #+END_QUOTE
 
----------
-
-* TODO Sharding
-First should actually research how to do it in a worthwhile way
-+(since we are essencially stuck in single-threaded mode for now)+
-
-[2021-2-23 Tue]/Nevermind: Sharding is useful if only to decrease
-rate limiting bottlenecks./
-
-** TODO Identify Concurrency handling
+** DONE Websockets (Gateway and Voice)
 
 ---------
 
