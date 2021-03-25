@@ -4,8 +4,7 @@
   "description": "",
   "esy": {
     "build": "dune build -p #{self.name}",
-    "buildDev":
-      "dune build --promote-install-files --root . --only-package #{self.name}"
+    "buildDev": "dune build --promote-install-files --root . --only-package #{self.name}"
   },
   "scripts": {
     "bot": "esy x discopotty",
@@ -59,14 +58,10 @@
     "@opam/httpaf": "anmonteiro/httpaf:httpaf.opam#0555dde",
     "@opam/httpaf-lwt": "anmonteiro/httpaf:httpaf-lwt.opam#0555dde",
     "@opam/httpaf-lwt-unix": "anmonteiro/httpaf:httpaf-lwt-unix.opam#0555dde",
-    "@opam/piaf":
-      "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
-    "@opam/websocketaf":
-      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
-    "@opam/websocketaf-lwt":
-      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
-    "@opam/websocketaf-lwt-unix":
-      "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
+    "@opam/piaf": "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
+    "@opam/websocketaf": "quartz55/websocketaf:websocketaf.opam#d309d15",
+    "@opam/websocketaf-lwt": "quartz55/websocketaf:websocketaf-lwt.opam#d309d15",
+    "@opam/websocketaf-lwt-unix": "quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15",
     "@opam/conf-pkg-config": "1.3",
     "@opam/conf-libssl": "2",
     "@opam/conf-libsodium": {
@@ -78,15 +73,20 @@
       }
     },
     "@opam/sodium": {
-      "source":
-        "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
-      "override": { "dependencies": { "@opam/conf-libsodium": "*" } }
+      "source": "github:quartz55/ocaml-sodium:sodium.opam#6088c1c",
+      "override": {
+        "dependencies": {
+          "@opam/conf-libsodium": "*"
+        }
+      }
     },
     "@discopotty/opus": "link:./vendor/opus/package.json",
     "@opam/conf-libopus": {
       "source": "link:./vendor/esy-libopus/conf-libopus.opam",
       "override": {
-        "dependencies": { "esy-libopus": "./vendor/esy-libopus" }
+        "dependencies": {
+          "esy-libopus": "./vendor/esy-libopus"
+        }
       }
     },
     "esy-libopus": "./vendor/esy-libopus/package.json",
@@ -99,6 +99,8 @@
   },
   "author": "",
   "license": "ISC",
-  "bugs": { "url": "https://github.com/quartz55/discopotty-re/issues" },
+  "bugs": {
+    "url": "https://github.com/quartz55/discopotty-re/issues"
+  },
   "homepage": "https://github.com/quartz55/discopotty-re#readme"
 }

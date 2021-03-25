@@ -38,7 +38,7 @@
               buildInputs = with pkgs; [
                 esy
                 ffmpeg
-                libsodium
+                youtube-dl
                 opam
               ];
             };

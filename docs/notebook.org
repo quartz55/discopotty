@@ -11,8 +11,7 @@ Link for base permissions invite:
 Reasoning about idempotent handling of reconnections is,
 how should I put it, /*hard*/ ...
 *** DOING Find a way to actually test this
-...that doesn't involve just waiting for it
-to /(eventually)/ crash...
+...that doesn't involve just waiting for it to /(eventually)/ crash...
 
 ** DONE Refactor Session
 It needs to be self-managed (to handle automatic reconnections)
@@ -31,11 +30,10 @@ Don't really know what this means, but I'll stick with 2 events per second :p
 ** DONE Refine Session
 Take some inspiration from ~voice.ml~
 
-*** DOING Investigate EOF reason in websockets
-Keep getting EOF consistently after connection. It seems to happen
-sporadically, but also seems to happen when the bot is in multiple guilds?
-- [ ] Experiment with the bot in multiple guilds after/during refinement
-- [ ] Seek out some more documentation or in discord's API guild
+*** DONE Investigate EOF reason in websockets
+WebsocketAF was the issue: fixed parser buffer size of 4kb
+(when =GUILD_READY= payloads can go well over that size)
+Submitted a PR [[https://github.com/anmonteiro/websocketaf/pull/25][here]]
 
 * TODO Sharding
 First should actually research how to do it in a worthwhile way
@@ -55,6 +53,27 @@ wants to run multiple different bots in a single application.
 *** DONE IP Discovery
 ** DONE Voice UDP
 *** DONE Test soundbite
+
+-------
+
+* TODO Music Player
+** TODO Replace external ffmpeg/ffprobe process with libav
+- Will this be a PITA because of all the needed codecs
+when building? /probably/
+- Is it worth it? /no/ (maybe it's actually worse given that ocaml-multicore isn't here yet 😿)
+- Is it fun? /yeah/ 😝
+
+** TODO youtube-dl support
+
+** TODO Custom ytdl-like implementation
+I reckon this is really only worth it if we do the libav thing.
+
+-------
+
+* TODO Cache layer
+Is it worth using something like [[https://github.com/mirage/irmin][Irmin]] here?
+** TODO Persistance layer
+I'm inclined towards sqlite+caqti based approach
 
 -------
 
@@ -80,10 +99,9 @@ Ideas list:
 [fn:msg_type_ref] Reference: https://discord.com/developers/docs/resources/channel#message-object-message-types
 
 ** DONE Custom format handler
-Using semantic tags: ~"@{<b>bold @{<i> bold_italic@} @{<i> italic@} @{<v>code@}"~
+Using semantic tags: ~"@{<b>bold @{<i>bold_italic@}@} @{<i>italic@} @{<v>code@}"~
 ** DONE Utils
-Just a little helper to make it easier to build
-valid stylized messages
+Just a little helper to make it easier to build valid stylized messages
 
 
 ---------

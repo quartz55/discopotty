@@ -6,6 +6,7 @@ module L = (val Relog.logger ~namespace:__MODULE__ ())
 module F = Relog.Field
 module WS_Client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client)
 module WSS_Client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client.SSL)
+module Ws_payload = Websocketaf.Websocket.Payload
 
 module Close_code = struct
   include Websocketaf.Websocket.Close_code
@@ -233,7 +234,21 @@ functor
       let websocket_handler wsd =
         let stream, push = Lwt_stream.create () in
         Lwt.wakeup_later u (Ok { info = conn_info; wsd; stream });
-        let frame ~opcode ~is_fin bs ~off ~len =
+        let do_read ~on_done payload =
+          let buf = Faraday.create 1024 in
+          let on_eof () =
+            L.debug (fun m -> m "done reading!");
+            let out = Faraday.serialize_to_bigstring buf in
+            on_done out
+          in
+          let rec on_read bs ~off ~len =
+            L.debug (fun m -> m "on_read (off=%d) (len=%d)" off len);
+            Faraday.schedule_bigstring buf bs ~off ~len;
+            Ws_payload.schedule_read payload ~on_read ~on_eof
+          in
+          Ws_payload.schedule_read payload ~on_read ~on_eof
+        in
+        let frame ~opcode ~is_fin bs ~len =
           L.debug (fun m ->
               m "frame"
                 ~fields:
@@ -243,31 +258,34 @@ functor
                       bool "is_fin" is_fin;
                       int "len" len;
                     ]);
+          let payload = bs in
           match opcode with
           | `Connection_close ->
               if len < 2 then failwith "no close code in frame";
-              let close_code =
-                Bigstringaf.get_int16_be bs off |> Close_code.of_int_exn
+              let on_done frame =
+                let close_code =
+                  Bigstringaf.get_int16_be frame 0 |> Close_code.of_int_exn
+                in
+                L.warn (fun m ->
+                    m "got close frame with code=%a" Close_code.pp close_code);
+                push (Some (Close close_code));
+                push None
               in
-              L.warn (fun m ->
-                  m "got close frame with code=%a" Close_code.pp close_code);
-              push (Some (Close close_code));
-              push None
+              do_read payload ~on_done
           | `Binary | `Text ->
               (* TODO zlib transport compression *)
-              let pl_json =
-                try
-                  Bigstringaf.substring bs ~off ~len |> Yojson.Safe.from_string
-                with exn ->
-                  L.err (fun m ->
-                      m "invalid json payload"
-                        ~fields:F.[ str "exn" (Printexc.to_string exn) ]);
-                  raise exn
-              in
-              L.debug (fun m ->
-                  m "got websocket payload:@.%s"
-                    (pl_json |> Yojson.Safe.pretty_to_string));
-              let () =
+              let on_done frame =
+                let pl_json =
+                  try Bigstringaf.to_string frame |> Yojson.Safe.from_string
+                  with exn ->
+                    L.err (fun m ->
+                        m "invalid json payload"
+                          ~fields:F.[ str "exn" (Printexc.to_string exn) ]);
+                    raise exn
+                in
+                L.debug (fun m ->
+                    m "got websocket payload:@.%s"
+                      (pl_json |> Yojson.Safe.pretty_to_string));
                 match P.of_json pl_json with
                 | (exception
                     Ppx_yojson_conv_lib__Yojson_conv.Of_yojson_error (exn, _))
@@ -277,7 +295,7 @@ functor
                           ~fields:F.[ str "exn" (Printexc.to_string exn) ])
                 | pl -> push (Some (Payload pl))
               in
-              ()
+              do_read payload ~on_done
           | `Continuation ->
               L.err (fun m -> m "continuation frame unsupported");
               exit (-1)
@@ -286,10 +304,7 @@ functor
           | `Other _ ->
               L.warn (fun m -> m "got non standard code frame, ignoring...")
         in
-        let eof () =
-          L.err (fun m -> m "!!!FATAL!!! websocket received EOF");
-          exit (-1)
-        in
+        let eof () = L.err (fun m -> m "!!!FATAL!!! websocket received EOF") in
         { Websocketaf.Client_connection.frame; eof }
       in
       let do_handshake =

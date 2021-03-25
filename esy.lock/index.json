@@ -1,5 +1,5 @@
 {
-  "checksum": "f55b978e1afb545172554d7b68a10a68",
+  "checksum": "eaa1ffbd5a1ea99cc5a731b9ac6b6a71",
   "root": "discopotty@link-dev:./package.json",
   "node": {
     "yarn-pkg-config@github:esy-ocaml/yarn-pkg-config#db3a0b63883606dd57c54a7158d560d6cba8cd79@d41d8cd9": {
@@ -167,11 +167,11 @@
         "ocaml@4.11.2000@d41d8cd9",
         "esy-libsodium@archive:https://github.com/jedisct1/libsodium/releases/download/1.0.18-RELEASE/libsodium-1.0.18.tar.gz#sha1:795b73e3f92a362fabee238a71735579bf46bb97@a5898027",
         "@opam/yojson@opam:1.7.0@7056d985",
-        "@opam/websocketaf-lwt-unix@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
-        "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+        "@opam/websocketaf-lwt-unix@github:quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15@d41d8cd9",
+        "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9",
         "@opam/uri@opam:4.1.0@aebd13aa", "@opam/toml@opam:6.0.0@494345d6",
         "@opam/stdint@opam:0.7.0@f8c664d1",
-        "@opam/sodium@link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
+        "@opam/sodium@github:quartz55/ocaml-sodium:sodium.opam#6088c1c@32227790",
         "@opam/ptime@opam:0.8.5@0051d642",
         "@opam/ppx_yojson_conv@opam:v0.14.0@97845f62",
         "@opam/ppx_deriving@opam:5.2.1@479736f0",
@@ -192,7 +192,7 @@
         "@discopotty/opus@link:vendor/opus/package.json"
       ],
       "devDependencies": [
-        "@opam/utop@opam:2.7.0@163ac7ce",
+        "@opam/utop@opam:2.7.0@4ba5133d",
         "@opam/qcheck-core@opam:0.17@79d621f8",
         "@opam/qcheck-alcotest@opam:0.17@a3b4b940",
         "@opam/odoc@opam:1.5.2@94f47c8b",
@@ -282,22 +282,23 @@
         "@opam/dune@opam:2.8.4@ee414d6c", "@opam/biniou@opam:1.2.1@d7570399"
       ]
     },
-    "@opam/websocketaf-lwt-unix@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam": {
+    "@opam/websocketaf-lwt-unix@github:quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15@d41d8cd9": {
       "id":
-        "@opam/websocketaf-lwt-unix@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
+        "@opam/websocketaf-lwt-unix@github:quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15@d41d8cd9",
       "name": "@opam/websocketaf-lwt-unix",
       "version":
-        "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt-unix.opam",
+        "github:quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15",
       "source": {
-        "type": "link",
-        "path": "/Users/jcosta/Documents/Workspace/contrib/websocketaf",
-        "manifest": "websocketaf-lwt-unix.opam"
+        "type": "install",
+        "source": [
+          "github:quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15"
+        ]
       },
       "overrides": [],
       "dependencies": [
         "ocaml@4.11.2000@d41d8cd9",
-        "@opam/websocketaf-lwt@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
-        "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+        "@opam/websocketaf-lwt@github:quartz55/websocketaf:websocketaf-lwt.opam#d309d15@d41d8cd9",
+        "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9",
         "@opam/lwt@opam:5.4.0@1ec6dbfd",
         "@opam/gluten-lwt-unix@opam:0.2.1@1a92c47e",
         "@opam/faraday-lwt-unix@opam:0.7.2@03e4a439",
@@ -305,28 +306,28 @@
       ],
       "devDependencies": [
         "ocaml@4.11.2000@d41d8cd9",
-        "@opam/websocketaf-lwt@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
-        "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+        "@opam/websocketaf-lwt@github:quartz55/websocketaf:websocketaf-lwt.opam#d309d15@d41d8cd9",
+        "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9",
         "@opam/lwt@opam:5.4.0@1ec6dbfd",
         "@opam/gluten-lwt-unix@opam:0.2.1@1a92c47e",
         "@opam/faraday-lwt-unix@opam:0.7.2@03e4a439"
       ]
     },
-    "@opam/websocketaf-lwt@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam": {
+    "@opam/websocketaf-lwt@github:quartz55/websocketaf:websocketaf-lwt.opam#d309d15@d41d8cd9": {
       "id":
-        "@opam/websocketaf-lwt@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
+        "@opam/websocketaf-lwt@github:quartz55/websocketaf:websocketaf-lwt.opam#d309d15@d41d8cd9",
       "name": "@opam/websocketaf-lwt",
-      "version":
-        "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf-lwt.opam",
+      "version": "github:quartz55/websocketaf:websocketaf-lwt.opam#d309d15",
       "source": {
-        "type": "link",
-        "path": "/Users/jcosta/Documents/Workspace/contrib/websocketaf",
-        "manifest": "websocketaf-lwt.opam"
+        "type": "install",
+        "source": [
+          "github:quartz55/websocketaf:websocketaf-lwt.opam#d309d15"
+        ]
       },
       "overrides": [],
       "dependencies": [
         "ocaml@4.11.2000@d41d8cd9",
-        "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+        "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9",
         "@opam/lwt@opam:5.4.0@1ec6dbfd",
         "@opam/gluten-lwt@opam:0.2.1@4dbee72c",
         "@opam/faraday-lwt-unix@opam:0.7.2@03e4a439",
@@ -336,23 +337,21 @@
       ],
       "devDependencies": [
         "ocaml@4.11.2000@d41d8cd9",
-        "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+        "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9",
         "@opam/lwt@opam:5.4.0@1ec6dbfd",
         "@opam/gluten-lwt@opam:0.2.1@4dbee72c",
         "@opam/faraday-lwt-unix@opam:0.7.2@03e4a439",
         "@opam/digestif@opam:1.0.0@ce08dfe9"
       ]
     },
-    "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam": {
+    "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9": {
       "id":
-        "@opam/websocketaf@link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+        "@opam/websocketaf@github:quartz55/websocketaf:websocketaf.opam#d309d15@d41d8cd9",
       "name": "@opam/websocketaf",
-      "version":
-        "link:/Users/jcosta/Documents/Workspace/contrib/websocketaf/websocketaf.opam",
+      "version": "github:quartz55/websocketaf:websocketaf.opam#d309d15",
       "source": {
-        "type": "link",
-        "path": "/Users/jcosta/Documents/Workspace/contrib/websocketaf",
-        "manifest": "websocketaf.opam"
+        "type": "install",
+        "source": [ "github:quartz55/websocketaf:websocketaf.opam#d309d15" ]
       },
       "overrides": [],
       "dependencies": [
@@ -487,8 +486,8 @@
       ],
       "devDependencies": [ "ocaml@4.11.2000@d41d8cd9" ]
     },
-    "@opam/utop@opam:2.7.0@163ac7ce": {
-      "id": "@opam/utop@opam:2.7.0@163ac7ce",
+    "@opam/utop@opam:2.7.0@4ba5133d": {
+      "id": "@opam/utop@opam:2.7.0@4ba5133d",
       "name": "@opam/utop",
       "version": "opam:2.7.0",
       "source": {
@@ -824,16 +823,14 @@
         "@opam/base-unix@opam:base@87d0b2eb"
       ]
     },
-    "@opam/sodium@link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam": {
+    "@opam/sodium@github:quartz55/ocaml-sodium:sodium.opam#6088c1c@32227790": {
       "id":
-        "@opam/sodium@link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
+        "@opam/sodium@github:quartz55/ocaml-sodium:sodium.opam#6088c1c@32227790",
       "name": "@opam/sodium",
-      "version":
-        "link:/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium/sodium.opam",
+      "version": "github:quartz55/ocaml-sodium:sodium.opam#6088c1c",
       "source": {
-        "type": "link",
-        "path": "/Users/jcosta/Documents/Workspace/contrib/ocaml-sodium",
-        "manifest": "sodium.opam"
+        "type": "install",
+        "source": [ "github:quartz55/ocaml-sodium:sodium.opam#6088c1c" ]
       },
       "overrides": [ { "dependencies": { "@opam/conf-libsodium": "*" } } ],
       "dependencies": [
