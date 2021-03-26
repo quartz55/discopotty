@@ -4,17 +4,21 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
-    nix-wrangle-pkg = { url = "github:timbertson/nix-wrangle"; flake = false; };
-    opam2nix-pkg = { url = "github:timbertson/opam2nix"; flake = false; };
+    ocaml-overlays = { url = "github:anmonteiro/nix-overlays"; flake = false; };
+    nixpkgs-2021_03_20 = { url = "https://github.com/nixos/nixpkgs/archive/f5e8bdd07d1a.tar.gz"; flake = false; };
   };
 
-  outputs = { self, nixpkgs, utils, nix-wrangle-pkg, opam2nix-pkg }:
+  outputs = { self, nixpkgs, utils, ocaml-overlays, nixpkgs-2021_03_20 }:
     utils.lib.eachDefaultSystem (
       system:
         let
-          pkgs = import nixpkgs { inherit system; };
-          # nix-wrangle = import nix-wrangle-pkg { pkgs = pkgs; };
-          # opam2nix = import opam2nix-pkg { inherit pkgs; inherit nix-wrangle; };
+          pkgs = import nixpkgs {
+            inherit system;
+          };
+          anmonteiro = import nixpkgs-2021_03_20 {
+            inherit system;
+            overlays = [ (import ocaml-overlays) ];
+          };
           # some symlink/relative path shenanigans happening 🤷
           esy = pkgs.writeShellScriptBin "esy" "${pkgs.nodePackages.esy}/lib/node_modules/.bin/esy $@";
         in
@@ -40,6 +44,7 @@
                 ffmpeg
                 youtube-dl
                 opam
+                anmonteiro.ocaml-ng.ocamlPackages_4_12.carl
               ];
             };
           }
