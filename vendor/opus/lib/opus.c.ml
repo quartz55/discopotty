@@ -16,6 +16,24 @@ module C = struct
   let signal_VOICE = [%c constant "OPUS_SIGNAL_VOICE" camlint]
   let signal_MUSIC = [%c constant "OPUS_SIGNAL_MUSIC" camlint]
   let br_MAX = [%c constant "OPUS_BITRATE_MAX" camlint]
+
+  let bw_NARROWBAND = [%c constant "OPUS_BANDWIDTH_NARROWBAND" camlint]
+  let bw_MEDIUMBAND = [%c constant "OPUS_BANDWIDTH_MEDIUMBAND" camlint]
+  let bw_WIDEBAND = [%c constant "OPUS_BANDWIDTH_WIDEBAND" camlint]
+  let bw_SUPERWIDEBAND = [%c constant "OPUS_BANDWIDTH_SUPERWIDEBAND" camlint]
+  let bw_FULLBAND = [%c constant "OPUS_BANDWIDTH_FULLBAND" camlint]
+
+  let fs_ARG = [%c constant "OPUS_FRAMESIZE_ARG" camlint]
+  let fs_2_5_MS = [%c constant "OPUS_FRAMESIZE_2_5_MS" camlint]
+  let fs_5_MS = [%c constant "OPUS_FRAMESIZE_5_MS" camlint]
+  let fs_10_MS = [%c constant "OPUS_FRAMESIZE_10_MS" camlint]
+  let fs_20_MS = [%c constant "OPUS_FRAMESIZE_20_MS" camlint]
+  let fs_40_MS = [%c constant "OPUS_FRAMESIZE_40_MS" camlint]
+  let fs_60_MS = [%c constant "OPUS_FRAMESIZE_60_MS" camlint]
+  let fs_80_MS = [%c constant "OPUS_FRAMESIZE_80_MS" camlint]
+  let fs_100_MS = [%c constant "OPUS_FRAMESIZE_100_MS" camlint]
+  let fs_120_MS = [%c constant "OPUS_FRAMESIZE_120_MS" camlint]
+
   let ctl_SET_APPLICATION_REQUEST = [%c constant "OPUS_SET_APPLICATION_REQUEST" camlint]
   let ctl_GET_APPLICATION_REQUEST = [%c constant "OPUS_GET_APPLICATION_REQUEST" camlint]
   let ctl_SET_BITRATE_REQUEST = [%c constant "OPUS_SET_BITRATE_REQUEST" camlint]
@@ -137,7 +155,7 @@ type bandwidth = [
 ]
 
 type framesize = [
-  | `from_arg
+  | `arg
   | `fs_2_5ms
   | `fs_5ms
   | `fs_10ms
@@ -248,90 +266,193 @@ module CTL = struct
     | Get_prediction_disabled -> C.ctl_GET_PREDICTION_DISABLED_REQUEST
     in
     Int32.of_int o
+
+  module R = struct
+    type _ arg =
+    | Arg: 'a * 'a conv -> 'a arg
+    and _ conv =
+    | Conv: ('a -> int32) * (int32 -> 'a) -> 'a conv
   
+    type ('i, 'o) def =
+    | Set: 'i arg -> ('i, unit) def
+    | Get: 'o conv -> (unit, 'o) def
+
+    let fn_0 ~code ~handle name =
+      let fn = Foreign.foreign name (handle_t @-> int32_t @-> returning int) in
+      fn handle code |> Error.wrap ()
+  
+    let fn_1: type i o. code:int32 -> handle:'a handle -> string -> (i, o) def -> o result =
+     fun ~code ~handle name def ->
+      match def with
+      | Set (Arg (a, Conv (ser, _))) ->
+        let fn = Foreign.foreign name (handle_t @-> int32_t @-> int32_t @-> returning int) in
+        fn handle code (ser a) |> Error.wrap ()
+      | Get (Conv (_, des)) ->
+        let fn = Foreign.foreign name (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
+        let v = allocate int32_t 0l in
+        fn handle code v |> Error.wrap (des !@v)
+
+      let (%>) a b x = b @@ a x
+
+      let set arg = Set arg
+      let get conv = Get conv
+      let conv: type i. (i -> int) -> (int -> i) -> i conv =
+        fun ser des -> Conv (ser %> Int32.of_int, Int32.to_int %> des)
+      let arg conv a = Arg (a, conv)
+
+      let bool = conv Bool.to_int (function | 0 -> false | 1 -> true | _ -> assert false)
+      let int = conv (fun i -> i) (fun i -> i)
+
+      let bw_to_int = function
+      | `Narrow -> C.bw_NARROWBAND
+      | `Medium -> C.bw_MEDIUMBAND
+      | `Wide -> C.bw_WIDEBAND
+      | `Superwide -> C.bw_SUPERWIDEBAND
+      | `Full -> C.bw_FULLBAND
+
+      let bw_of_int = function
+      | n when n = C.bw_NARROWBAND -> `Narrow 
+      | n when n = C.bw_MEDIUMBAND -> `Medium 
+      | n when n = C.bw_WIDEBAND -> `Wide 
+      | n when n = C.bw_SUPERWIDEBAND -> `Superwide 
+      | n when n = C.bw_FULLBAND -> `Full 
+      | _ -> assert false
+
+      let max_bandwidth =
+        conv bw_to_int bw_of_int
+
+      let bandwidth =
+        let to_int = function | #bandwidth as b -> bw_to_int b | `auto -> C._AUTO in
+        let of_int = function | n when n = C._AUTO -> `auto | n -> bw_of_int n in
+        conv to_int of_int
+
+      let bitrate =
+        let to_int = function
+        | `auto -> C._AUTO
+        | `max -> C.br_MAX
+        | `bps br -> br
+        in
+        let of_int = function
+        | n when n = C._AUTO -> `auto
+        | n when n = C.br_MAX -> `max
+        | o -> `bps o
+        in
+        conv to_int of_int
+
+      let signal =
+        let to_int = function
+        | `auto -> C._AUTO
+        | `voice -> C.signal_VOICE
+        | `music -> C.signal_MUSIC
+        in
+        let of_int = function
+        | s when s = C._AUTO -> `auto
+          | s when s = C.signal_VOICE -> `voice
+          | s when s = C.signal_MUSIC -> `music
+          | _ -> assert false
+        in
+        conv to_int of_int
+
+      let channels =
+        let to_int = function
+        | `auto -> C._AUTO
+        | `mono -> 1
+        | `stereo -> 2
+        in
+        let of_int = function
+        | n when n = C._AUTO -> `auto
+        | 1 -> `mono
+        | 2 -> `stereo
+        | _ -> assert false
+        in
+        conv to_int of_int
+
+      let application =
+        let to_int = function
+        | Voip -> C.app_VOIP
+        | Audio -> C.app_AUDIO
+        | Restricted_lowdelay -> C.app_RESTRICTED_LOWEDELAY
+        in
+        let of_int = function
+        | n when n = C.app_VOIP -> Voip
+        | n when n = C.app_AUDIO -> Audio
+        | n when n = C.app_RESTRICTED_LOWEDELAY -> Restricted_lowdelay
+        | _ -> assert false
+        in
+        conv to_int of_int
+
+      let framesize =
+        let to_int = function
+        | `arg -> C.fs_ARG
+        | `fs_2_5ms -> C.fs_2_5_MS
+        | `fs_5ms -> C.fs_5_MS
+        | `fs_10ms -> C.fs_10_MS
+        | `fs_20ms -> C.fs_20_MS
+        | `fs_40ms -> C.fs_40_MS
+        | `fs_60ms -> C.fs_60_MS
+        | `fs_80ms -> C.fs_80_MS
+        | `fs_100ms -> C.fs_100_MS
+        | `fs_120ms -> C.fs_120_MS
+        in
+        let of_int = function
+        | n when n = C.fs_ARG -> `arg
+        | n when n = C.fs_2_5_MS -> `fs_2_5ms
+        | n when n = C.fs_5_MS -> `fs_5ms
+        | n when n = C.fs_10_MS -> `fs_10ms
+        | n when n = C.fs_20_MS -> `fs_20ms
+        | n when n = C.fs_40_MS -> `fs_40ms
+        | n when n = C.fs_60_MS -> `fs_60ms
+        | n when n = C.fs_80_MS -> `fs_80ms
+        | n when n = C.fs_100_MS -> `fs_100ms
+        | n when n = C.fs_120_MS -> `fs_120ms
+        | _ -> assert false
+        in
+        conv to_int of_int
+  end
+
   let request: type a b. ctl_fn:string -> a handle -> (a, b) t -> b result
     = fun ~ctl_fn handle req ->
     let code = _code req in
     match req with
     (* generic *)
-    | Reset_state ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> returning int) in
-      fn handle code |> Error.wrap ()
-    | Get_phase_inversion_disabled ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let b = allocate int32_t 0l in
-      fn handle code b |> Error.wrap (match !@b with | 0l -> false | 1l -> true | _ -> assert false)
+    | Reset_state -> R.fn_0 ~code ~handle ctl_fn
+    | Get_final_range -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Get_bandwidth -> R.fn_1 ~code ~handle ctl_fn R.(get bandwidth)
+    | Get_sample_rate -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Set_phase_inversion_disabled b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
+    | Get_phase_inversion_disabled -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
+    | Get_in_DTX -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
     (* encoder *)
-    | Set_complexity c ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      fn handle code (Int32.of_int c) |> Error.wrap ()
-    | Get_complexity ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let c = allocate int32_t 0l in
-      fn handle code c |> Error.wrap (Int32.to_int !@c)
-    | Set_bitrate br ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      let br = match br with
-        | `auto -> C._AUTO
-        | `max -> C.br_MAX
-        | `bps br -> br
-      in
-      fn handle code (Int32.of_int br) |> Error.wrap ()
-    | Get_bitrate ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let br = allocate int32_t 0l in
-      fn handle code br |> Error.wrap_lazy (fun () ->
-        match Int32.to_int !@br with
-        | n when n = C._AUTO -> `auto
-        | n when n = C.br_MAX -> `max
-        | o -> `bps o)
-    | Set_packet_loss_perc plp ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      fn handle code (Int32.of_int plp) |> Error.wrap ()
-    | Get_packet_loss_perc ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let plp = allocate int32_t 0l in
-      fn handle code plp |> Error.wrap (Int32.to_int !@plp)
-    | Set_signal s ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      let s = match s with
-      | `auto -> C._AUTO
-      | `voice -> C.signal_VOICE
-      | `music -> C.signal_MUSIC
-      in
-      fn handle code (Int32.of_int s) |> Error.wrap ()
-    | Get_signal ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let s = allocate int32_t 0l in
-      fn handle code s
-      |> Error.wrap_lazy (fun () ->
-        match Int32.to_int !@s with
-        | s when s = C._AUTO -> `auto
-        | s when s = C.signal_VOICE -> `voice
-        | s when s = C.signal_MUSIC -> `music
-        | _ -> assert false)
-    | Set_inband_FEC b ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      fn handle code (Int32.of_int @@ Bool.to_int b) |> Error.wrap ()
-    | Get_inband_FEC ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let b = allocate int32_t 0l in
-      fn handle code b |> Error.wrap (match !@b with | 0l -> false | 1l -> true | _ -> assert false)
-    | Set_LSB_depth d ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      fn handle code (Int32.of_int d) |> Error.wrap ()
-    | Get_LSB_depth ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let d = allocate int32_t 0l in
-      fn handle code d |> Error.wrap (Int32.to_int !@d)
-    | Set_DTX b ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> int32_t @-> returning int) in
-      fn handle code (Int32.of_int @@ Bool.to_int b) |> Error.wrap ()
-    | Get_DTX ->
-      let fn = Foreign.foreign ctl_fn (handle_t @-> int32_t @-> ptr int32_t @-> returning int) in
-      let b = allocate int32_t 0l in
-      fn handle code b |> Error.wrap (match !@b with | 0l -> false | 1l -> true | _ -> assert false)
-    | _ -> assert false
+    | Set_complexity c -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg int c)
+    | Get_complexity -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Set_bitrate br -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bitrate br)
+    | Get_bitrate -> R.fn_1 ~code ~handle ctl_fn R.(get bitrate)
+    | Set_VBR b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
+    | Get_VBR -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
+    | Set_VBR_constraint b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
+    | Get_VBR_constraint -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
+    | Set_force_channels ch -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg channels ch)
+    | Get_force_channels -> R.fn_1 ~code ~handle ctl_fn R.(get channels)
+    | Set_max_bandwidth bw -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg max_bandwidth bw)
+    | Get_max_bandwidth -> R.fn_1 ~code ~handle ctl_fn R.(get max_bandwidth)
+    | Set_bandwidth bw -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bandwidth bw)
+    | Set_signal s -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg signal s)
+    | Get_signal -> R.fn_1 ~code ~handle ctl_fn R.(get signal)
+    | Set_application a -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg application a)
+    | Get_application -> R.fn_1 ~code ~handle ctl_fn R.(get application)
+    | Get_lookahead -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Set_inband_FEC b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
+    | Get_inband_FEC -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
+    | Set_packet_loss_perc plp -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg int plp)
+    | Get_packet_loss_perc -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Set_DTX b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
+    | Get_DTX -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
+    | Set_LSB_depth d -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg int d)
+    | Get_LSB_depth -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Set_expert_frame_duration fs -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg framesize fs)
+    | Get_expert_frame_duration -> R.fn_1 ~code ~handle ctl_fn R.(get framesize)
+    | Set_prediction_disabled b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
+    | Get_prediction_disabled -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
 end
 
 module BA = Bigarray

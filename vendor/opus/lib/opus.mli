@@ -18,7 +18,7 @@ type bandwidth = [
 ]
 
 type framesize = [
-  | `from_arg
+  | `arg
   | `fs_2_5ms
   | `fs_5ms
   | `fs_10ms
