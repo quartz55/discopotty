@@ -1,0 +1,74 @@
+(library
+ (name Opus_c)
+ (public_name opus.c)
+ (modules opus_c ffi_stubs_gen)
+ (wrapped false)
+ (libraries ctypes opus.c.ffi)
+ (c_library_flags
+  (:standard
+   (:include c_library_flags.sexp)))
+ (foreign_stubs
+  (language c)
+  (names ffi_stubs_gen)
+  (flags
+   (:standard
+    (:include c_flags.sexp)))))
+
+(rule
+ (targets c_flags.sexp c_library_flags.sexp c_flags.lines)
+ (deps
+  (:discover config/discover.exe))
+ (action
+  (run %{discover})))
+
+(library
+ (name Types_stubs)
+ (public_name opus.cstubs.types)
+ (modules types_stubs)
+ (libraries ctypes))
+
+(executable
+ (name gen_types)
+ (modules gen_types)
+ (libraries ctypes.stubs opus.cstubs.types))
+
+(rule
+ (targets types_gen.c)
+ (deps
+  (:gen ./gen_types.exe))
+ (action
+  (run %{gen} %{targets})))
+
+(rule
+ (targets types_stubs_gen.exe)
+ (deps
+  (:c ./types_gen.c)
+  c_flags.lines)
+ (action
+  (bash
+   "%{cc} %{c} -I %{lib:ctypes:.} -I %{ocaml_where} %{read-lines:c_flags.lines} -o %{targets}")))
+
+(rule
+ (with-stdout-to
+  types_stubs_gen.ml
+  (run ./types_stubs_gen.exe)))
+
+(library
+ (name Ffi_stubs)
+ (public_name opus.c.ffi)
+ (modules Types_stubs_gen Ffi_stubs Opus_c_types)
+ (flags
+  (:standard -w -9-16-27))
+ (libraries ctypes opus.cstubs.types))
+
+(executable
+ (name gen_ffi)
+ (modules gen_ffi)
+ (libraries ctypes.stubs opus.c.ffi))
+
+(rule
+ (targets ffi_stubs_gen.c ffi_stubs_gen.ml)
+ (deps
+  (:gen ./gen_ffi.exe))
+ (action
+  (run %{gen} %{targets})))

@@ -21,7 +21,7 @@
   "devDependencies": {
     "@opam/merlin": "*",
     "@opam/ocaml-lsp-server": "*",
-    "@opam/ocamlformat": "0.17.0",
+    "@opam/ocamlformat": "*",
     "@opam/odoc": "*"
   },
   "resolutions": {

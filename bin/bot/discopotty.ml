@@ -26,7 +26,7 @@ let handler cfg client =
       match Cmd.of_message ~prefix content with
       | None -> Lwt.return ()
       | Some ("ping", args) ->
-          let msg = Format.asprintf "**pong** %s" args in
+          let msg = Msg.fmt "@{<b>pong@} %s" args in
           D.Client.send_message channel_id msg client
       | Some ("suicide", _args) ->
           let msg =

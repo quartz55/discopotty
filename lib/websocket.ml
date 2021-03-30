@@ -112,7 +112,7 @@ let gen_nonce =
     for i = 0 to pred n do
       Bytes.set str i alphanum.[Random.int len rnd]
     done;
-    str |> Bytes.to_string
+    str |> Bytes.unsafe_to_string
 
 let _uri_info uri =
   let ssl =
@@ -248,7 +248,7 @@ functor
           in
           Ws_payload.schedule_read payload ~on_read ~on_eof
         in
-        let frame ~opcode ~is_fin bs ~len =
+        let frame ~opcode ~is_fin payload ~len =
           L.debug (fun m ->
               m "frame"
                 ~fields:
@@ -258,7 +258,6 @@ functor
                       bool "is_fin" is_fin;
                       int "len" len;
                     ]);
-          let payload = bs in
           match opcode with
           | `Connection_close ->
               if len < 2 then failwith "no close code in frame";
@@ -304,7 +303,10 @@ functor
           | `Other _ ->
               L.warn (fun m -> m "got non standard code frame, ignoring...")
         in
-        let eof () = L.err (fun m -> m "!!!FATAL!!! websocket received EOF") in
+        let eof () =
+          L.err (fun m -> m "!!!FATAL!!! websocket received EOF");
+          exit (-1)
+        in
         { Websocketaf.Client_connection.frame; eof }
       in
       let do_handshake =

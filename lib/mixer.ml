@@ -29,7 +29,7 @@ module Driver = struct
   let make_silence ?n () = Audio_stream.n_silence_pipe ?n ()
 
   let create () =
-    { state = Idle; silence = Some (make_silence ~n:20 ()); dead = false }
+    { state = Idle; silence = None; dead = false }
 
   let now () = Mtime_clock.elapsed_ns ()
 
@@ -131,13 +131,13 @@ let create_opus_encoder ?(frametype = `s16) () =
     | [] -> Ok enc
   in
   Encoder.create ~samplerate:Rtp._SAMPLE_RATE ~channels:`stereo
-    ~application:Audio ()
+    ~application:`Audio ()
   >>= (fun enc ->
         let shared =
           CTL.
             [
-              Set_signal `music;
-              Set_bitrate `max;
+              Set_signal `Music;
+              Set_bitrate `Max;
               Set_complexity 10;
               Set_packet_loss_perc 5;
               Set_complexity 10;

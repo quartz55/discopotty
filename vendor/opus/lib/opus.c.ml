@@ -173,8 +173,10 @@ type application =
   | Restricted_lowdelay
 
 module CTL = struct
-  external opus_encoder_ctl: enc_handle -> int32_t -> int32_t ptr -> Error.t = "opus_encoder_ctl"
-  external opus_decoder_ctl: dec_handle -> int32_t -> int32_t ptr -> Error.t = "opus_decoder_ctl"
+  (* we don't use these directly, but it's 
+     good for checking at cstubs compile time *)
+  external opus_encoder_ctl: enc_handle -> int32_t -> int32_t ptr -> Error.t = "opus_encoder_ctl" [@@ocaml.warning "-32"]
+  external opus_decoder_ctl: dec_handle -> int32_t -> int32_t ptr -> Error.t = "opus_decoder_ctl" [@@ocaml.warning "-32"]
 
   type enc = [`enc]
   type dec = [`dec]
@@ -221,6 +223,10 @@ module CTL = struct
   | Set_prediction_disabled: bool -> (enc handle, unit) t
   | Get_prediction_disabled: (enc handle, bool) t
   (* decoder *)
+  | Set_gain: int -> (dec handle, unit) t
+  | Get_gain: (dec handle, int) t
+  | Get_last_packet_duration: (dec handle, int) t
+  | Get_pitch: (dec handle, int) t
 
   let _code: type a b. (a, b) t -> int32 =
    fun t ->
@@ -264,6 +270,11 @@ module CTL = struct
     | Get_expert_frame_duration -> C.ctl_GET_EXPERT_FRAME_DURATION_REQUEST
     | Set_prediction_disabled _ -> C.ctl_SET_PREDICTION_DISABLED_REQUEST
     | Get_prediction_disabled -> C.ctl_GET_PREDICTION_DISABLED_REQUEST
+    (* decoder *)
+    | Set_gain _ -> C.ctl_SET_GAIN_REQUEST
+    | Get_gain -> C.ctl_GET_GAIN_REQUEST
+    | Get_last_packet_duration -> C.ctl_GET_LAST_PACKET_DURATION_REQUEST
+    | Get_pitch -> C.ctl_GET_PITCH_REQUEST
     in
     Int32.of_int o
 
@@ -453,20 +464,25 @@ module CTL = struct
     | Get_expert_frame_duration -> R.fn_1 ~code ~handle ctl_fn R.(get framesize)
     | Set_prediction_disabled b -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg bool b)
     | Get_prediction_disabled -> R.fn_1 ~code ~handle ctl_fn R.(get bool)
+    (* encoder *)
+    | Set_gain g -> R.fn_1 ~code ~handle ctl_fn R.(set @@ arg int g)
+    | Get_gain -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Get_last_packet_duration -> R.fn_1 ~code ~handle ctl_fn R.(get int)
+    | Get_pitch -> R.fn_1 ~code ~handle ctl_fn R.(get int)
 end
 
 module BA = Bigarray
 module BA1 = Bigarray.Array1
 type bigstring = (char, BA.int8_unsigned_elt, BA.c_layout) BA1.t
 type s16frame = (int, BA.int16_signed_elt, BA.c_layout) BA1.t
-type f32frame = (int, BA.float32_elt, BA.c_layout) BA1.t
+type f32frame = (float, BA.float32_elt, BA.c_layout) BA1.t
 
 module Encoder = struct
   type encoder = [`enc] handle
   let%c t = ptr void
-  external opus_encoder_size: int -> int = "opus_encoder_get_size"
-  external opus_encoder_init: t -> int32_t -> int -> int -> Error.t = "opus_encoder_init"
-  external opus_encoder_create: int32_t -> int -> int -> Error.t ptr -> t = "opus_encoder_create"
+  external opus_encoder_get_size: int -> int = "opus_encoder_get_size"
+  external opus_encoder_init: t -> fs:int32_t -> channels:int -> app:int -> Error.t = "opus_encoder_init"
+  external opus_encoder_create: fs:int32_t -> channels:int -> app:int -> Error.t ptr -> t = "opus_encoder_create"
   external opus_encoder_destroy: t -> void = "opus_encoder_destroy"
 
   external opus_encode: t -> pcm:int16_t ptr -> fs:int -> buf:uchar ptr -> max:int -> int = "opus_encode"
@@ -485,12 +501,10 @@ module Encoder = struct
 
   let recommended_max_size = 4000
 
-  let own = true
-
   let _enc = function | Own e | C (e, _) -> e
 
   let create ?(samplerate=48000) ?(channels=`stereo) ?(application=Audio) () =
-    let c = match channels with | `stereo -> 2 | `mono -> 1 in
+    let channels = match channels with | `stereo -> 2 | `mono -> 1 in
     let app = match application with
       | Voip -> C.app_VOIP
       | Audio -> C.app_AUDIO
@@ -499,7 +513,7 @@ module Encoder = struct
     let err, enc = match own with
     | false ->
       let err = allocate int (-1) in
-      let enc = opus_encoder_create Int32.(of_int samplerate) c app err in
+      let enc = opus_encoder_create ~fs:Int32.(of_int samplerate) ~channels ~app err in
       let gc =
         allocate_n ~finalise:(fun _ -> opus_encoder_destroy enc)
         ~count:0 void
@@ -507,21 +521,21 @@ module Encoder = struct
       !@err, C (enc, gc)
     | true -> 
       let enc =
-        allocate_n ~count:(opus_encoder_size c) uchar
+        allocate_n ~count:(opus_encoder_get_size channels) uchar
         |> coerce (ptr uchar) (ptr void)
       in
-      let err = opus_encoder_init enc Int32.(of_int samplerate) c app in
+      let err = opus_encoder_init enc ~fs:Int32.(of_int samplerate) ~channels ~app in
       err, Own enc
     in
     Error.wrap enc err
     |> Result.map (fun enc -> {
       enc;
       samplerate;
-      channels=c;
+      channels;
       app=application;
     })
   
-  let size { channels; _ } = opus_encoder_size channels
+  let size { channels; _ } = opus_encoder_get_size channels
     
   let _encode_blit:
     type a b.
@@ -577,4 +591,105 @@ module Encoder = struct
     _encode_blit t ?pcm_off:off ?duration pcm buf
   
   let ctl t req = CTL.request ~ctl_fn:"opus_encoder_ctl" (_enc t.enc) req
+end
+
+module Decoder = struct
+  type decoder = [`dec] handle
+  let%c t = ptr void
+  external opus_decoder_get_size: int -> int = "opus_decoder_get_size"
+  external opus_decoder_init: t -> fs:int32_t -> channels:int -> Error.t = "opus_decoder_init"
+  external opus_decoder_create: fs:int32_t -> channels:int -> Error.t ptr -> t = "opus_decoder_create"
+  external opus_decoder_destroy: t -> void = "opus_decoder_destroy"
+
+  external opus_decode: t -> buf:uchar ptr -> len:int32_t -> pcm:int16_t ptr -> fs:int -> fec:bool-> int = "opus_decode"
+  external opus_decode_float: t -> buf:uchar ptr -> len:int32_t -> pcm:float ptr -> fs:int -> fec:bool -> int = "opus_decode_float"
+
+  type t = {
+    dec: dec;
+    samplerate: int;
+    channels: int;
+  }
+  and dec = | Own of decoder | C of decoder * gc
+  and gc = unit ptr
+
+  let _dec = function | Own e | C (e, _) -> e
+
+  let create ?(samplerate=48000) ?(channels=`stereo) () =
+    let channels = match channels with | `stereo -> 2 | `mono -> 1 in
+    let err, dec = match own with
+    | false ->
+      let err = allocate int (-1) in
+      let dec = opus_decoder_create ~fs:Int32.(of_int samplerate) ~channels err in
+      let gc =
+        allocate_n ~finalise:(fun _ -> opus_decoder_destroy dec)
+        ~count:0 void
+      in
+      !@err, C (dec, gc)
+    | true -> 
+      let dec =
+        allocate_n ~count:(opus_decoder_get_size channels) uchar
+        |> coerce (ptr uchar) (ptr void)
+      in
+      let err = opus_decoder_init dec ~fs:Int32.(of_int samplerate) ~channels in
+      err, Own dec
+    in
+    Error.wrap dec err
+    |> Result.map (fun dec -> {
+      dec;
+      samplerate;
+      channels;
+    })
+  
+  let size { channels; _ } = opus_decoder_get_size channels
+
+  let _decode_blit:
+    type a b.
+    t ->
+    ?fec:bool ->
+    ?buf_off:int ->
+    ?buf_len:int ->
+    bigstring ->
+    ?pcm_off:int ->
+    ?framesize:int ->
+    (a, b, BA.c_layout) BA1.t ->
+    (a, b, BA.c_layout) BA1.t result =
+    fun t ?(fec=false) ?(buf_off=0) ?buf_len buf ?(pcm_off=0) ?(framesize=120) pcm ->
+    let pcm = BA1.sub pcm pcm_off (BA1.dim pcm - pcm_off) in
+    let buf = BA1.sub buf buf_off (match buf_len with | None -> (BA1.dim buf - buf_off) | Some l -> l) in
+    let fs = t.samplerate / 1000 * framesize in
+    if BA1.dim pcm < (fs * t.channels) then
+      raise (Invalid_argument "given pcm frame does not have enough samples");
+    let buf_p =
+      (bigarray_start array1 buf) |>
+      coerce (ptr char) (ptr uchar)
+    in
+    let len = Int32.of_int @@ BA1.dim buf in
+    let len = match BA1.kind pcm with
+      | BA.Int16_signed -> opus_decode (_dec t.dec) ~buf:buf_p ~len ~pcm:(bigarray_start array1 pcm) ~fs ~fec
+      | BA.Float32 -> opus_decode_float (_dec t.dec) ~buf:buf_p ~len ~pcm:(bigarray_start array1 pcm) ~fs ~fec
+      | _ ->
+        print_endline "!!!FATAL!!! invalid opus pcm buffer type (must be s16 or f32)";
+        exit (-1)
+    in
+    match len with
+    | n when n < 0 -> Error (Error.of_int n)
+    | n -> Ok (BA1.sub pcm 0 (n * t.channels))
+
+  let decode_blit t ?fec ?buf_off ?buf_len buf ?pcm_off ?framesize pcm =
+    _decode_blit t ?fec ?buf_off ?buf_len buf ?pcm_off ?framesize pcm
+
+  let decode t ?fec ?off ?len buf =
+    let framesize = 120 in
+    let pcm = BA1.create BA.int16_signed BA.c_layout (t.samplerate / 1000 * framesize * t.channels) in
+    _decode_blit t ?fec ?buf_off:off ?buf_len:len buf ~framesize pcm
+
+  let decode_blit_float t ?fec ?buf_off ?buf_len buf ?pcm_off ?framesize pcm =
+    _decode_blit t ?fec ?buf_off ?buf_len buf ?pcm_off ?framesize pcm
+
+  let decode_float t ?fec ?off ?len buf =
+    let framesize = 120 in
+    let pcm = BA1.create BA.float32 BA.c_layout (t.samplerate / 1000 * framesize * t.channels) in
+    _decode_blit t ?fec ?buf_off:off ?buf_len:len buf ~framesize pcm
+
+  let ctl t req = CTL.request ~ctl_fn:"opus_decoder_ctl" (_dec t.dec) req
 end

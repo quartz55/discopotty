@@ -56,7 +56,7 @@ wants to run multiple different bots in a single application.
 
 -------
 
-* TODO Music Player
+* DOING Music Player
 ** TODO Replace external ffmpeg/ffprobe process with libav
 - Will this be a PITA because of all the needed codecs
 when building? /probably/

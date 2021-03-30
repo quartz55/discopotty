@@ -1,7 +1,6 @@
 (tests
  (names token_bucket audio_stream)
  (package discopotty)
- ; (deps ../bite.mp3)
  (libraries
   discord
   relog.lib

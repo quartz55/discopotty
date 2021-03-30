@@ -1,5 +1,5 @@
 {
-  "checksum": "b01887b77e04c37ac3b1e6a8b300ab10",
+  "checksum": "5401d17ffddded5f5996294ac14674e0",
   "root": "@discopotty/opus@link-dev:./package.json",
   "node": {
     "yarn-pkg-config@github:esy-ocaml/yarn-pkg-config#db3a0b63883606dd57c54a7158d560d6cba8cd79@d41d8cd9": {
