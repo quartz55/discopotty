@@ -1,0 +1,6 @@
+(library
+ (name dp_utils)
+ (public_name discopotty.utils)
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord))
+ (libraries containers containers-data ke stdint lwt relog.lib))

@@ -1,4 +1,4 @@
-open Containers
+open Globals
 open Lwt.Infix
 
 module L = (val Relog.logger ~namespace:__MODULE__ ())
@@ -237,12 +237,12 @@ functor
         let do_read ~on_done payload =
           let buf = Faraday.create 1024 in
           let on_eof () =
-            L.debug (fun m -> m "done reading!");
+            L.trace (fun m -> m "done reading!");
             let out = Faraday.serialize_to_bigstring buf in
             on_done out
           in
           let rec on_read bs ~off ~len =
-            L.debug (fun m -> m "on_read (off=%d) (len=%d)" off len);
+            L.trace (fun m -> m "on_read (off=%d) (len=%d)" off len);
             Faraday.schedule_bigstring buf bs ~off ~len;
             Ws_payload.schedule_read payload ~on_read ~on_eof
           in

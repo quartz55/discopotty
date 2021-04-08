@@ -56,7 +56,7 @@
 (library
  (name Ffi_stubs)
  (public_name opus.c.ffi)
- (modules Types_stubs_gen Ffi_stubs Opus_c_types)
+ (modules Types_stubs_gen Ffi_stubs)
  (flags
   (:standard -w -9-16-27))
  (libraries ctypes opus.cstubs.types))

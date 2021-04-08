@@ -6,12 +6,11 @@ module Msg = M.Message
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 let setup_logging () =
-  let cli_fmter = Relog.Formatter.default ~color:true ~oneline:false () in
-  let cli_fmt = Format.std_formatter in
-  Relog.Sink.make (fun r ->
-      if Relog.(Level.compare (Record.level r) Level.Debug) <= 0 then
-        cli_fmter cli_fmt r
-      else ())
+  let open Relog in
+  let cli_fmter = Formatter.default ~color:true ~oneline:false () in
+  let cli_fmt = Format.formatter_of_out_channel stderr in
+  Sink.make (fun r ->
+      if Level.Infix.(Record.level r <= Debug) then cli_fmter cli_fmt r else ())
   |> Relog.Sink.set
 
 let handler cfg client =
@@ -68,6 +67,7 @@ let handler cfg client =
       Lwt.return ()
 
 let () =
+  Gc.(set { (get ()) with minor_heap_size = 256000 * 4 });
   let inner () =
     let open Result.Infix in
     setup_logging ();

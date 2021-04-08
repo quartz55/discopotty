@@ -1,6 +1,7 @@
 (executable
- (name sine)
- (public_name sine_gen)
- (modules sine)
+ (name notebook)
+ (public_name notebook.bc)
+ (modes byte)
+ (modules notebook)
  (package discopotty)
- (libraries discord containers))
+ (libraries discord discopotty.utils containers))

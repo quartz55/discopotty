@@ -1,5 +1,6 @@
 include Stdint
 include Containers
+include Dp_utils
 module Models = Discord_models
 
 type snowflake = Models.Snowflake.t

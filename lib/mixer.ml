@@ -28,8 +28,7 @@ module Driver = struct
 
   let make_silence ?n () = Audio_stream.n_silence_pipe ?n ()
 
-  let create () =
-    { state = Idle; silence = None; dead = false }
+  let create () = { state = Idle; silence = None; dead = false }
 
   let now () = Mtime_clock.elapsed_ns ()
 
@@ -78,16 +77,24 @@ module Driver = struct
           m "sent %d frames, next tick in %f seconds" frames timeout);
       Lwt_unix.sleep timeout >|= fun () -> `Tick
     in
+    let last_yield = ref None in
     let rec yield_till tick =
-      let y = yield t >|= fun () -> if t.dead then `Dead else `Yield in
-      Lwt.choose [ tick; y ] >>= function
-      | `Dead ->
+      let y =
+        match !last_yield with
+        | Some y -> y
+        | None ->
+            let y = yield t in
+            last_yield := Some y;
+            y
+      in
+      Lwt.choose [ tick; (y >|= fun () -> `Yield) ] >>= function
+      | `Yield when t.dead ->
           Lwt.cancel tick;
           Lwt.return_unit
-      | `Yield -> yield_till tick
-      | `Tick ->
-          Lwt.cancel y;
-          Lwt.return_unit
+      | `Yield ->
+          last_yield := None;
+          yield_till tick
+      | `Tick -> Lwt.return_unit
     in
     let rec f' ?(drift = lazy (now ())) ?(i = 0) () =
       match (t.silence, t.state) with
@@ -103,7 +110,13 @@ module Driver = struct
           | `Yield n ->
               let frames = i + n in
               yield_till (schedule_next ~drift ~frames ()) >>= fun () -> f' ())
-      | None, Idle -> yield t >>= fun () -> f' ()
+      | None, Idle ->
+          (match !last_yield with
+          | Some y ->
+              last_yield := None;
+              y
+          | None -> yield t)
+          >>= fun () -> f' ()
       | None, Playing s -> (
           exhaust s.rx >>= function
           | `Closed n ->
@@ -173,9 +186,7 @@ let create ?(burst = 15) voice =
   in
   let driver = Driver.create () in
   let yield driver =
-    Lwt.wrap_in_cancelable (Lwt_pipe.read chan)
-    >|= Option.get_or ~default:`Poison
-    >|= function
+    Lwt_pipe.read chan >|= Option.get_or ~default:`Poison >|= function
     | `Req (Play (s, waker)) ->
         let s = Lwt_pipe.Reader.filter_map ~f:encode s in
         Driver.play driver ~s:{ waker; rx = s }

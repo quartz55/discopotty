@@ -1,9 +1,11 @@
-module T = Opus_c_types
 
 module Def (F : Ctypes.FOREIGN) = struct
   open Ctypes
   open F
-  module Types = Opus_c_types
+
+  module Types = Types_stubs.Def (Types_stubs_gen)
+  module T = Types
+
 
   module Error = struct
     let to_string = foreign "opus_strerror" (T.Error.t @-> returning string)
@@ -18,7 +20,7 @@ module Def (F : Ctypes.FOREIGN) = struct
     let encode = foreign "opus_encode" (T.Encoder.t @-> ptr int16_t @-> int @-> ptr uchar @-> int @-> returning int)
     let encode_float = foreign "opus_encode_float" (T.Encoder.t @-> ptr float @-> int @-> ptr uchar @-> int @-> returning int)
   end
-
+  
   module Decoder = struct
     let get_size = foreign "opus_decoder_get_size" (int @-> returning int)
     let init = foreign "opus_decoder_init" (ptr void @-> int32_t @-> int @-> returning T.Error.t)

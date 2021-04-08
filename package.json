@@ -93,8 +93,7 @@
       }
     },
     "esy-libopus": "./vendor/esy-libopus/package.json",
-    "@esy-ocaml/reason": "3.7.0",
-    "relog": "quartz55/relog-native#d74d484"
+    "relog": "quartz55/relog-native#46af429"
   },
   "repository": {
     "type": "git",
