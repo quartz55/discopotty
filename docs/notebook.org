@@ -73,7 +73,7 @@ I reckon this is really only worth it if we do the libav thing.
 * TODO Cache layer
 Is it worth using something like [[https://github.com/mirage/irmin][Irmin]] here?
 ** TODO Persistance layer
-I'm inclined towards sqlite+caqti based approach
+I'm inclined towards a sqlite+caqti based approach
 
 -------
 
@@ -103,6 +103,10 @@ Using semantic tags: ~"@{<b>bold @{<i>bold_italic@}@} @{<i>italic@} @{<v>code@}"
 ** DONE Utils
 Just a little helper to make it easier to build valid stylized messages
 
+---------
+
+* DOING Model types & (de)serializers
+** DOING Complete Payloads types & (de)serializers
 
 ---------
 
@@ -154,6 +158,11 @@ these are the headers:
 #+END_QUOTE
 
 ** DONE Websockets (Gateway and Voice)
+
+---------
+
+* TODO HTTP API implementation
+Doesn't have to be fully done, just comprehensive enough for now.
 
 ---------
 

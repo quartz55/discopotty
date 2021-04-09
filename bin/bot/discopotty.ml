@@ -20,7 +20,7 @@ let handler cfg client =
   |> ignore;
   let open Lwt.Syntax in
   function
-  | D.Events.MessageCreate { content; channel_id; guild_id; _ } -> (
+  | D.Events.Message_create { content; channel_id; guild_id; _ } -> (
       L.warn (fun m -> m "MESSAGE: %s" content);
       match Cmd.of_message ~prefix content with
       | None -> Lwt.return ()

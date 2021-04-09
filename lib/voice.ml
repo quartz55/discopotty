@@ -4,13 +4,13 @@ open Lwt.Infix
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 module F = Relog.Field
-module Ws_Conn = Websocket.Make (Voice_payload)
+module Ws_conn = Websocket.Make (Voice_payload)
 module Pl = Voice_payload
 
 module Ws = struct
   type t = t' ref
 
-  and t' = Open of Token_bucket.t * Ws_Conn.t | Closed
+  and t' = Open of Token_bucket.t * Ws_conn.t | Closed
 
   let create conn = ref (Open (Token_bucket.make ~capacity:2 1., conn))
 
@@ -19,7 +19,7 @@ module Ws = struct
     | Open (tb, conn) ->
         Lwt.(
           Token_bucket.take tb >|= fun () ->
-          Ws_Conn.send conn pl;
+          Ws_conn.send conn pl;
           Ok ())
     | Closed -> Lwt.return (Error (`Msg "cannot send payload to closed ws"))
 
@@ -34,7 +34,7 @@ module Ws = struct
     | Open (tb, conn) ->
         t := Closed;
         Token_bucket.cancel_waiting tb;
-        Ws_Conn.close ~code conn
+        Ws_conn.close ~code conn
     | Closed -> ()
 end
 
@@ -236,7 +236,7 @@ let do_handshake ~server_id ~user_id ~session_id ~token ?session ws pl_pipe =
         hb.preempt ~interval:hb_secs ();
         poll' st
     | ( ((Id hb | Resuming (hb, _) | Establish_udp (hb, _)) as st),
-        HeartbeatACK nonce ) ->
+        Heartbeat_ack nonce ) ->
         L.debug (fun m -> m "got hearbeat ack for nonce '%d'" nonce);
         hb.ack nonce;
         poll' st
@@ -255,7 +255,7 @@ let do_handshake ~server_id ~user_id ~session_id ~token ?session ws pl_pipe =
             (Pl.make_select_protocol ~address ~port ~mode:"xsalsa20_poly1305")
         in
         poll' (Establish_udp (hb, udp))
-    | Establish_udp (hb, udp), SessionDescription desc ->
+    | Establish_udp (hb, udp), Session_description desc ->
         L.info (fun m -> m "successfuly handshaked voice connection");
         let secret = secret_of_int_list desc.secret_key in
         let mode = Udp_connection.encryption_mode_of_string desc.mode in
@@ -270,11 +270,11 @@ let do_handshake ~server_id ~user_id ~session_id ~token ?session ws pl_pipe =
 
 let create_conn uri =
   let open Lwt_result.Syntax in
-  let+ conn = Ws_Conn.create ~zlib:false uri in
+  let+ conn = Ws_conn.create ~zlib:false uri in
   let p =
-    Lwt_pipe.of_stream (Ws_Conn.stream conn)
+    Lwt_pipe.of_stream (Ws_conn.stream conn)
     |> Lwt_pipe.Reader.map ~f:(function
-         | Ws_Conn.Payload pl -> `Pl pl
+         | Ws_conn.Payload pl -> `Pl pl
          | Close code ->
              let code = Close_code.of_close_code_exn code in
              L.warn (fun m ->
@@ -390,18 +390,18 @@ let create ?(on_destroy = fun _ -> ()) ?(version = Versions.Voice.V4) ~server_id
               m "got ready on established session, new voice server??@.%a"
                 Pl.Ready.pp info);
           assert false
-      | SessionDescription desc ->
+      | Session_description desc ->
           L.warn (fun m ->
               m "got session description, updating...@.%a"
-                Pl.SessionDescription.pp desc);
+                Pl.Session_description.pp desc);
           let secret = secret_of_int_list desc.secret_key in
           let mode = Udp_connection.encryption_mode_of_string desc.mode in
           Rtp.set_crypt session.rtp Udp_connection.{ secret; mode };
           poll' ()
-      | HeartbeatACK nonce ->
+      | Heartbeat_ack nonce ->
           hb.ack nonce;
           poll' ()
-      | Speaking _ | Resumed | ClientDisconnect ->
+      | Speaking _ | Resumed | Client_disconnect ->
           L.debug (fun m -> m "ignoring speaking/resumed/clientdisconnect");
           poll' ()
     in

@@ -33,7 +33,7 @@ module Ready = struct
   [@@deriving yojson, show] [@@yojson.allow_extra_fields]
 end
 
-module SelectProtocol = struct
+module Select_protocol = struct
   type t = { protocol : string; data : data }
 
   and data = { address : string; port : int; mode : string }
@@ -43,7 +43,7 @@ module SelectProtocol = struct
     { protocol = "udp"; data = { address; port; mode } }
 end
 
-module SessionDescription = struct
+module Session_description = struct
   type t = { mode : string; secret_key : int list }
   [@@deriving yojson, show] [@@yojson.allow_extra_fields]
 end
@@ -72,16 +72,16 @@ end
 
 type _ t =
   | Identify : Identify.t -> Dir.send t
-  | SelectProtocol : SelectProtocol.t -> Dir.send t
+  | Select_protocol : Select_protocol.t -> Dir.send t
   | Ready : Ready.t -> Dir.recv t
   | Heartbeat : int -> Dir.send t
-  | SessionDescription : SessionDescription.t -> Dir.recv t
+  | Session_description : Session_description.t -> Dir.recv t
   | Speaking : Speaking.t -> _ Dir.bidi t
-  | HeartbeatACK : int -> Dir.recv t
+  | Heartbeat_ack : int -> Dir.recv t
   | Resume : Resume.t -> Dir.send t
   | Hello : int -> Dir.recv t
   | Resumed : Dir.recv t
-  | ClientDisconnect : Dir.recv t
+  | Client_disconnect : Dir.recv t
 
 include Payload.Make (struct
   type nonrec 'a t = 'a t
@@ -90,26 +90,26 @@ include Payload.Make (struct
    fun t ->
     match t with
     | Identify _ -> 0
-    | SelectProtocol _ -> 1
+    | Select_protocol _ -> 1
     | Ready _ -> 2
     | Heartbeat _ -> 3
-    | SessionDescription _ -> 4
+    | Session_description _ -> 4
     | Speaking _ -> 5
-    | HeartbeatACK _ -> 6
+    | Heartbeat_ack _ -> 6
     | Resume _ -> 7
     | Hello _ -> 8
     | Resumed -> 9
-    | ClientDisconnect -> 13
+    | Client_disconnect -> 13
 
   let of_raw raw =
     match (raw.Raw.op, raw.d) with
     | 2, Some d -> Ready (Ready.t_of_yojson d)
-    | 4, Some d -> SessionDescription (SessionDescription.t_of_yojson d)
+    | 4, Some d -> Session_description (Session_description.t_of_yojson d)
     | 5, Some d -> Speaking (Speaking.t_of_yojson d)
-    | 6, Some d -> HeartbeatACK ([%of_yojson: int] d)
+    | 6, Some d -> Heartbeat_ack ([%of_yojson: int] d)
     | 8, Some d -> Hello (Hello.t_of_yojson d)
     | 9, _ -> Resumed
-    | 13, Some _d -> ClientDisconnect
+    | 13, Some _d -> Client_disconnect
     | n, _ when n <= 13 ->
         invalid_payload raw
           (Format.asprintf "payload with opcode=%d is not recv type" n)
@@ -120,7 +120,7 @@ include Payload.Make (struct
     |>
     match t with
     | Identify id -> Raw.make ~d:(Identify.yojson_of_t id) ()
-    | SelectProtocol sp -> Raw.make ~d:(SelectProtocol.yojson_of_t sp) ()
+    | Select_protocol sp -> Raw.make ~d:(Select_protocol.yojson_of_t sp) ()
     | Heartbeat nonce -> Raw.make ~d:(`Int nonce) ()
     | Speaking d -> Raw.make ~d:(Speaking.yojson_of_t d) ()
     | Resume d -> Raw.make ~d:(Resume.yojson_of_t d) ()
@@ -132,7 +132,7 @@ let make_identify ~server_id ~user_id ~session_id ~token =
   Identify (Identify.make ~server_id ~user_id ~session_id ~token)
 
 let make_select_protocol ~address ~port ~mode =
-  SelectProtocol (SelectProtocol.make ~address ~port ~mode)
+  Select_protocol (Select_protocol.make ~address ~port ~mode)
 
 let make_resume ~server_id ~session_id ~token =
   Resume (Resume.make ~server_id ~session_id ~token)

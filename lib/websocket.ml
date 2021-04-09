@@ -4,8 +4,8 @@ open Lwt.Infix
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 module F = Relog.Field
-module WS_Client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client)
-module WSS_Client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client.SSL)
+module Ws_client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client)
+module Wss_client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client.SSL)
 module Ws_payload = Websocketaf.Websocket.Payload
 
 module Close_code = struct
@@ -310,8 +310,8 @@ functor
         { Websocketaf.Client_connection.frame; eof }
       in
       let do_handshake =
-        if ssl then WSS_Client.connect socket
-        else WS_Client.connect (Lwt_ssl.get_fd socket)
+        if ssl then Wss_client.connect socket
+        else Ws_client.connect (Lwt_ssl.get_fd socket)
       in
       let* _ =
         do_handshake ~nonce ~host ~port ~resource ~error_handler

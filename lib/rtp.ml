@@ -13,7 +13,7 @@ let _FRAME_SIZE = _SAMPLE_RATE / 1000 * _FRAME_LEN
 let _VOICE_PACKET_MAX = 1460
 
 (* https://tools.ietf.org/html/rfc7587#section-4.2 *)
-let ts_incr = Uint32.of_int @@ (48000 / 1000 * _FRAME_LEN)
+let ts_incr = Uint32.of_int @@ _FRAME_SIZE
 
 module Sync = struct
   type t = uint16 * uint32

@@ -1,11 +1,52 @@
+module Channel_mention = struct
+  type t = {
+    id : Snowflake.t;
+    guild_id : Snowflake.t;
+    typ : int; [@key "type"]
+    name : string;
+  }
+  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+end
+
 type t = {
   id : Snowflake.t;
   channel_id : Snowflake.t;
-  guild_id : Snowflake.t option;
+  guild_id : Snowflake.t option; [@yojson.option]
+  author : User.t;
+  member : Guild_member.t option; [@yojson.option]
   content : string;
-  type_ : int; [@key "type"]
+  timestamp : string;
+  edited_timestamp : string option;
+  tts : bool;
+  mention_everyone : bool;
+  mentions : User.t list;
+  mention_roles : Snowflake.t list;
+  mention_channels : Channel_mention.t list option; [@yojson.option]
+  (* attachments: Attachment.t list; *)
+  (* embeds: Embed.t list; *)
+  (* reactions: Reaction.t list option; [@yojson.option] *)
+  nonce : string option; [@yojson.option]
+  pinned : bool;
+  webhook_id : Snowflake.t option; [@yojson.option]
+  typ : int; [@key "type"]
+  (* activity : Activity.t option; [@yojson.option] *)
+  (* application : Application.t option; [@yojson.option] *)
+  (* message_reference : Reference.t option; [@yojson.option] *)
+  flags : int option; [@yojson.option]
+  (* stickers : Sticker.t list option; [@yojson.option] *)
+  referenced_message : t option option; [@yojson.option]
+      (* interaction : Interaction.t option; [@yojson.option] *)
 }
-[@@deriving yojson] [@@yojson.allow_extra_fields]
+[@@deriving yojson, show] [@@yojson.allow_extra_fields]
+
+type partial = {
+  id : Snowflake.t;
+  channel_id : Snowflake.t;
+  content : string option; [@yojson.option]
+  timestamp : string option; [@yojson.option]
+  edited_timestamp : string;
+}
+[@@deriving of_yojson, show] [@@yojson.allow_extra_fields]
 
 module Utils = struct
   let wrap ~c s =

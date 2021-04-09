@@ -4,13 +4,13 @@ open Lwt.Infix
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 module F = Relog.Field
-module Ws_Conn = Websocket.Make (Gateway_payload)
+module Ws_conn = Websocket.Make (Gateway_payload)
 module Pl = Gateway_payload
 
 module Ws = struct
   type t = t' ref
 
-  and t' = Open of Token_bucket.t * Ws_Conn.t | Closed
+  and t' = Open of Token_bucket.t * Ws_conn.t | Closed
 
   let create conn = ref (Open (Token_bucket.make ~capacity:2 1., conn))
 
@@ -19,7 +19,7 @@ module Ws = struct
     | Open (tb, conn) ->
         Lwt.(
           Token_bucket.take tb >|= fun () ->
-          Ws_Conn.send conn pl;
+          Ws_conn.send conn pl;
           Ok ())
     | Closed -> Lwt.return (Error (`Msg "cannot send payload to closed ws"))
 
@@ -34,7 +34,7 @@ module Ws = struct
     | Open (tb, conn) ->
         t := Closed;
         Token_bucket.cancel_waiting tb;
-        Ws_Conn.close ~code conn
+        Ws_conn.close ~code conn
     | Closed -> ()
 end
 
@@ -153,7 +153,7 @@ let do_handshake ~token ?reconn ws pl_rx =
         |> Lwt_result.map_err (fun e ->
                hb.cancel ();
                e)
-    | (Greet _ as st), (Heartbeat | HeartbeatACK) ->
+    | (Greet _ as st), (Heartbeat | Heartbeat_ack) ->
         (* safe to ignore heartbeat related payloads during greeting
            as we'll send an heartbeat as soon as we can *)
         poll' st
@@ -172,7 +172,7 @@ let do_handshake ~token ?reconn ws pl_rx =
         L.debug (fun m -> m "requested heartbeat, obliging...");
         hb.preempt ();
         poll' st
-    | ((Id hb | Resuming (_, _, hb)) as st), Pl.HeartbeatACK ->
+    | ((Id hb | Resuming (_, _, hb)) as st), Pl.Heartbeat_ack ->
         L.debug (fun m -> m "got hearbeat ack");
         hb.ack ();
         poll' st
@@ -182,7 +182,7 @@ let do_handshake ~token ?reconn ws pl_rx =
             m "session is ready"
               ~fields:F.[ int "version" info.v; str "id" id; int "seq" seq ]);
         Lwt_result.return (`Connected (info.user, { id; seq }, hb))
-    | Id _, InvalidSession _ ->
+    | Id _, Invalid_session _ ->
         L.err (fun m -> m "session was invalidated while identifying");
         Lwt_result.fail `Invalidated
     | (Id _ as st), Dispatch _ ->
@@ -198,7 +198,7 @@ let do_handshake ~token ?reconn ws pl_rx =
               ~fields:F.[ int "seq" seq; int "event_seq" seq ]);
         let* () = Lwt_pipe.write_exn ev_tx ev |> Error.catch_lwt in
         poll' (Resuming ({ info with seq }, ev_tx, hb))
-    | Resuming (_, _, hb), InvalidSession _ ->
+    | Resuming (_, _, hb), Invalid_session _ ->
         let rand_wait =
           let r = Random.(run (float_range 1. 5.)) in
           (* only need precision up to ms *)
@@ -225,11 +225,11 @@ let do_handshake ~token ?reconn ws pl_rx =
 
 let create_conn uri =
   let open Lwt_result.Syntax in
-  let+ conn = Ws_Conn.create ~zlib:false uri in
+  let+ conn = Ws_conn.create ~zlib:false uri in
   let p =
-    Lwt_pipe.of_stream (Ws_Conn.stream conn)
+    Lwt_pipe.of_stream (Ws_conn.stream conn)
     |> Lwt_pipe.Reader.map ~f:(function
-         | Ws_Conn.Payload pl -> `Pl pl
+         | Ws_conn.Payload pl -> `Pl pl
          | Close code ->
              L.warn (fun m ->
                  m "gateway ws session was closed: %a" Websocket.Close_code.pp
@@ -329,11 +329,11 @@ let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
           L.debug (fun m -> m "requested hearbeat, obliging...");
           hb.preempt ();
           poll' ()
-      | HeartbeatACK ->
+      | Heartbeat_ack ->
           L.debug (fun m -> m "got heartbeat ack");
           hb.ack ();
           poll' ()
-      | InvalidSession resumable ->
+      | Invalid_session resumable ->
           L.warn (fun m -> m "session invalidated (resumable=%b)" resumable);
           let session = if resumable then Some (!info, ev_pipe) else None in
           hb.cancel ();

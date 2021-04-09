@@ -80,13 +80,13 @@ let join_voice ~guild_id ~channel_id ({ session; _ } as t) =
         ~self_mute:false guild_id
     in
     let is_own_vs
-        { Events.VoiceState.guild_id = guild; channel_id = chan; user_id; _ } =
+        { Events.Voice_state.guild_id = guild; channel_id = chan; user_id; _ } =
       match (guild, chan) with
       | Some g, Some c ->
           Models.Snowflake.(guild_id = g && channel_id = c && user_id = user.id)
       | _ -> false
     in
-    let is_own_srv { Events.VoiceServerUpdate.guild_id = guild; _ } =
+    let is_own_srv { Events.Voice_server_update.guild_id = guild; _ } =
       Models.Snowflake.(guild_id = guild)
     in
 
@@ -94,21 +94,21 @@ let join_voice ~guild_id ~channel_id ({ session; _ } as t) =
       let rec f' ?st ?srv () =
         let* evt = Lwt_pipe.read evs in
         match ((evt : Events.t option), st, srv) with
-        | Some (VoiceStateUpdate st), _, None ->
+        | Some (Voice_state_update st), _, None ->
             L.debug (fun m -> m "got voice state");
             f' ~st ?srv ()
-        | Some (VoiceServerUpdate srv), None, _ ->
+        | Some (Voice_server_update srv), None, _ ->
             L.debug (fun m -> m "got voice server");
             f' ?st ~srv ()
-        | Some (VoiceStateUpdate st), _, Some srv
-        | Some (VoiceServerUpdate srv), Some st, _ ->
+        | Some (Voice_state_update st), _, Some srv
+        | Some (Voice_server_update srv), Some st, _ ->
             Lwt.return (st, srv)
         | _ -> assert false
       and evs =
         _fork_events t
         |> Lwt_pipe.Reader.filter ~f:(function
-             | Events.VoiceStateUpdate st -> is_own_vs st
-             | Events.VoiceServerUpdate srv -> is_own_srv srv
+             | Events.Voice_state_update st -> is_own_vs st
+             | Events.Voice_server_update srv -> is_own_srv srv
              | _ -> false)
       in
       let p = f' () in

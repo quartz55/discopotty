@@ -57,26 +57,27 @@ module Intents = struct
       aux [] t 15
     in
     Format.fprintf fmt "%s" out
+
+  let show = Format.asprintf "%a" pp
 end
 
 module Identify = struct
   type t = {
     token : string;
-    intents : Intents.t;
     properties : conn_props;
     compress : bool option; [@yojson.option]
     large_threshold : int option; [@yojson.option]
     shard : (int * int) option; [@yojson.option]
     guild_subscriptions : bool option; [@yojson.option]
+    intents : Intents.t;
   }
-  [@@yojson.allow_extra_fields]
 
   and conn_props = {
     os : string; [@key "$os"]
     browser : string; [@key "$browser"]
     device : string; [@key "$device"]
   }
-  [@@yojson.allow_extra_fields] [@@deriving yojson]
+  [@@deriving yojson_of, show]
 
   let op = 2
 
@@ -114,40 +115,38 @@ end
 
 module Resume = struct
   type t = { token : string; session_id : string; seq : int }
-  [@@deriving yojson] [@@yojson.allow_extra_fields]
+  [@@deriving yojson_of, show]
 
   let op = 6
 end
 
 module Presence = struct
-  type status = [ `Online | `Dnd | `Idle | `Invisible | `Offline ]
-  [@@deriving yojson]
-
   type t = {
     since : int option; [@yojson.option]
-    (* activities: Activity.t array; *)
-    status : status;
+    activities : Models.Activity.t list;
+    status : Models.Presence_status.t;
     afk : bool;
   }
-  [@@deriving yojson]
+  [@@deriving yojson_of, show]
 
-  let make ?since ~afk status = { since; status; afk }
+  let make ?since ?(activities = []) ~afk status =
+    { since; activities; status; afk }
 end
 
-module VoiceState = struct
+module Voice_state = struct
   type t = {
     guild_id : Models.Snowflake.t;
     channel_id : Models.Snowflake.t option;
     self_mute : bool;
     self_deaf : bool;
   }
-  [@@deriving yojson]
+  [@@deriving yojson_of, show]
 
   let make ?channel_id ~self_mute ~self_deaf guild_id =
     { guild_id; channel_id; self_mute; self_deaf }
 end
 
-module GuildRequestMembers = struct
+module Guild_request_members = struct
   type t = {
     guild_id : Models.Snowflake.t;
     query : string option; [@yojson.option]
@@ -156,7 +155,7 @@ module GuildRequestMembers = struct
     user_ids : Models.Snowflake.t list option; [@yojson.option]
     nonce : string option; [@yojson.option]
   }
-  [@@deriving yojson, show]
+  [@@deriving yojson_of, show]
 
   type q =
     [ `All
@@ -188,14 +187,14 @@ type _ t =
   | Dispatch : int * Events.t -> Dir.recv t
   | Heartbeat : _ Dir.bidi t
   | Identify : Identify.t -> Dir.send t
-  | PresenceUpdate : Presence.t -> Dir.send t
-  | VoiceStateUpdate : VoiceState.t -> Dir.send t
+  | Presence_update : Presence.t -> Dir.send t
+  | Voice_state_update : Voice_state.t -> Dir.send t
   | Resume : Resume.t -> Dir.send t
   | Reconnect : Dir.recv t
-  | RequestGuildMembers : GuildRequestMembers.t -> Dir.send t
-  | InvalidSession : bool -> Dir.recv t
+  | Request_guild_members : Guild_request_members.t -> Dir.send t
+  | Invalid_session : bool -> Dir.recv t
   | Hello : int -> Dir.recv t
-  | HeartbeatACK : Dir.recv t
+  | Heartbeat_ack : Dir.recv t
 
 include Payload.Make (struct
   type nonrec 'a t = 'a t
@@ -206,14 +205,14 @@ include Payload.Make (struct
     | Dispatch _ -> 0
     | Heartbeat -> 1
     | Identify _ -> 2
-    | PresenceUpdate _ -> 3
-    | VoiceStateUpdate _ -> 4
+    | Presence_update _ -> 3
+    | Voice_state_update _ -> 4
     | Resume _ -> 6
     | Reconnect -> 7
-    | RequestGuildMembers _ -> 8
-    | InvalidSession _ -> 9
+    | Request_guild_members _ -> 8
+    | Invalid_session _ -> 9
     | Hello _ -> 10
-    | HeartbeatACK -> 11
+    | Heartbeat_ack -> 11
 
   let of_raw raw =
     match (raw.Raw.op, raw.d) with
@@ -227,20 +226,20 @@ include Payload.Make (struct
         Dispatch (s, Events.of_name t d)
     | 1, _ -> Heartbeat
     | 7, _ -> Reconnect
-    | 9, Some d -> InvalidSession ([%of_yojson: bool] d)
+    | 9, Some d -> Invalid_session ([%of_yojson: bool] d)
     | 9, None ->
         L.warn (fun m ->
             m
-              "got InvalidSession payload without 'resumable' boolean, \
+              "got Invalid_session payload without 'resumable' boolean, \
                defaulting to false");
-        InvalidSession false
+        Invalid_session false
     | 10, Some d ->
         let hb =
           Yojson.Safe.Util.(d |> member "heartbeat_interval" |> to_int)
         in
         Hello hb
     | 10, None -> invalid_payload raw "Hello missing 'heartbeat_interval'"
-    | 11, _ -> HeartbeatACK
+    | 11, _ -> Heartbeat_ack
     | n, _ when n <= 11 ->
         invalid_payload raw
           (Format.asprintf "payload with opcode=%d is not recv type" n)
@@ -252,11 +251,11 @@ include Payload.Make (struct
     match t with
     | Heartbeat -> Raw.make ()
     | Identify d -> Raw.make ~d:(Identify.yojson_of_t d) ()
-    | PresenceUpdate d -> Raw.make ~d:(Presence.yojson_of_t d) ()
-    | VoiceStateUpdate d -> Raw.make ~d:(VoiceState.yojson_of_t d) ()
+    | Presence_update d -> Raw.make ~d:(Presence.yojson_of_t d) ()
+    | Voice_state_update d -> Raw.make ~d:(Voice_state.yojson_of_t d) ()
     | Resume d -> Raw.make ~d:(Resume.yojson_of_t d) ()
-    | RequestGuildMembers d ->
-        Raw.make ~d:(GuildRequestMembers.yojson_of_t d) ()
+    | Request_guild_members d ->
+        Raw.make ~d:(Guild_request_members.yojson_of_t d) ()
 end)
 
 let heartbeat : _ t = Heartbeat
@@ -268,12 +267,14 @@ let make_identify ?compress ?large_threshold ?shard ?guild_subscriptions
        ?properties ?intents token)
 
 let make_presence_update ?since ~afk status =
-  PresenceUpdate (Presence.make ?since ~afk status)
+  Presence_update (Presence.make ?since ~afk status)
 
 let make_voice_state_update ?channel_id ~self_mute ~self_deaf guild_id =
-  VoiceStateUpdate (VoiceState.make ?channel_id ~self_mute ~self_deaf guild_id)
+  Voice_state_update
+    (Voice_state.make ?channel_id ~self_mute ~self_deaf guild_id)
 
 let make_resume ~token ~session_id ~seq = Resume { token; session_id; seq }
 
 let make_request_guild_members ?presences ?nonce ~q guild_id =
-  RequestGuildMembers (GuildRequestMembers.make ?presences ?nonce ~q guild_id)
+  Request_guild_members
+    (Guild_request_members.make ?presences ?nonce ~q guild_id)

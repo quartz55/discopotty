@@ -1,5 +1,5 @@
 open Containers
-module M = Discord.Token_bucket
+module M = Dp_utils.Token_bucket
 
 module U = struct
   let ns_conv =

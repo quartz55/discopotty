@@ -3,4 +3,13 @@
  (public_name discopotty.utils)
  (preprocess
   (pps ppx_deriving.show ppx_deriving.ord))
- (libraries containers containers-data ke stdint lwt relog.lib))
+ (libraries
+  containers
+  containers-data
+  ke
+  stdint
+  lwt
+  lwt.unix
+  mtime
+  mtime.clock.os
+  relog.lib))

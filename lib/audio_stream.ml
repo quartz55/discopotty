@@ -4,21 +4,6 @@ module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 open Lwt.Infix
 
-let _SAMPLE_RATE = 48000
-
-let _CHANNELS = 2
-
-let _FRAME_LEN = 20
-
-let _FRAME_SIZE = _SAMPLE_RATE / 1000 * _FRAME_LEN
-
-(** Maximum packet size for a voice packet.
- Set a safe amount below the Ethernet MTU to avoid fragmentation/rejection. *)
-let _VOICE_PACKET_MAX = 1460
-
-(* https://tools.ietf.org/html/rfc7587#section-4.2 *)
-let ts_incr = Uint32.of_int @@ (48000 / 1000 * _FRAME_LEN)
-
 let silence_frame =
   [ '\xf8'; '\xff'; '\xfe' ] |> String.of_list
   |> Bigstringaf.of_string ~off:0 ~len:3
@@ -161,11 +146,11 @@ module Ffmpeg = struct
           let raw = proc#stdout in
           let logs () = Lwt_io.read proc#stderr in
           L.info (fun m -> m "ffmpeg running with pid=%d" proc#pid);
-          let buf = Bigstringaf.create (_FRAME_SIZE * _CHANNELS * 2) in
+          let buf = Bigstringaf.create (Rtp._FRAME_SIZE * Rtp._CHANNELS * 2) in
           let buf_len = Bigstringaf.length buf in
           let parse_frame =
             let parser =
-              Parser.s16le ~channels:_CHANNELS ~frame_size:_FRAME_SIZE
+              Parser.s16le ~channels:Rtp._CHANNELS ~frame_size:Rtp._FRAME_SIZE
             in
             fun () -> parser buf
           in
