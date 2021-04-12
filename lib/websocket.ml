@@ -6,7 +6,7 @@ module L = (val Relog.logger ~namespace:__MODULE__ ())
 module F = Relog.Field
 module Ws_client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client)
 module Wss_client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client.SSL)
-module Ws_payload = Websocketaf.Websocket.Payload
+module Ws_payload = Websocketaf.Payload
 
 module Close_code = struct
   include Websocketaf.Websocket.Close_code
@@ -248,7 +248,7 @@ functor
           in
           Ws_payload.schedule_read payload ~on_read ~on_eof
         in
-        let frame ~opcode ~is_fin payload ~len =
+        let frame ~opcode ~is_fin ~len payload =
           L.debug (fun m ->
               m "frame"
                 ~fields:
@@ -310,15 +310,16 @@ functor
         { Websocketaf.Client_connection.frame; eof }
       in
       let do_handshake =
-        if ssl then Wss_client.connect socket
-        else Ws_client.connect (Lwt_ssl.get_fd socket)
+        if ssl then
+          Wss_client.connect socket ~nonce ~host ~port ~resource ~error_handler
+            ~websocket_handler
+          >|= ignore
+        else
+          Ws_client.connect (Lwt_ssl.get_fd socket) ~nonce ~host ~port ~resource
+            ~error_handler ~websocket_handler
+          >|= ignore
       in
-      let* _ =
-        do_handshake ~nonce ~host ~port ~resource ~error_handler
-          ~websocket_handler
-        |> Lwt_result.catch
-        |> Lwt_result.map_err (fun e -> `Exn e)
-      in
+      let* _ = do_handshake |> Error.catch_lwt in
       p >>= function
       | Error (`Redir loc) ->
           let host, port, ssl, resource = _uri_info (Uri.of_string loc) in

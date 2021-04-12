@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "description": "",
   "esy": {
-    "build": "dune build -p #{self.name}",
+    "build": "dune build -p #{self.name} --profile=release",
     "buildDev": "dune build --promote-install-files --root . --only-package #{self.name}"
   },
   "scripts": {
@@ -62,9 +62,9 @@
     "@opam/httpaf-lwt": "anmonteiro/httpaf:httpaf-lwt.opam#0555dde",
     "@opam/httpaf-lwt-unix": "anmonteiro/httpaf:httpaf-lwt-unix.opam#0555dde",
     "@opam/piaf": "anmonteiro/piaf:piaf.opam#01601aeda4a415d335f61ac13fb738cdb7b834ea",
-    "@opam/websocketaf": "quartz55/websocketaf:websocketaf.opam#d309d15",
-    "@opam/websocketaf-lwt": "quartz55/websocketaf:websocketaf-lwt.opam#d309d15",
-    "@opam/websocketaf-lwt-unix": "quartz55/websocketaf:websocketaf-lwt-unix.opam#d309d15",
+    "@opam/websocketaf": "anmonteiro/websocketaf:websocketaf.opam#ad4e61e",
+    "@opam/websocketaf-lwt": "anmonteiro/websocketaf:websocketaf-lwt.opam#ad4e61e",
+    "@opam/websocketaf-lwt-unix": "anmonteiro/websocketaf:websocketaf-lwt-unix.opam#ad4e61e",
     "@opam/conf-pkg-config": "1.3",
     "@opam/conf-libssl": "2",
     "@opam/conf-libsodium": {

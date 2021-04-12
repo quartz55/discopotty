@@ -27,11 +27,12 @@ h2 is an implementation of the HTTP/2 specification entirely in OCaml.
 h2-lwt-unix provides an Lwt runtime implementation for h2 that targets UNIX
 binaries.
 """
+x-commit-hash: "a696a1ce66f573c23041840322d0e1770d5ebc70"
 url {
   src:
-    "https://github.com/anmonteiro/ocaml-h2/releases/download/0.6.1/h2-0.6.1.tbz"
+    "https://github.com/anmonteiro/ocaml-h2/releases/download/0.8.0/h2-0.8.0.tbz"
   checksum: [
-    "sha256=585fb8f4f1bef0a9f93dbbd24a7a9d2d048e725bab0c2fbdbef9eb301e7a677d"
-    "sha512=ee6d4f554593187b8ac21fa73c98e5be82b5a99828f4d5dfb082623a57e2eccbd0eb252a5d970481ad6892580e9fffeaa819ab729708f6dd11072165ebceca01"
+    "sha256=c6675a092f8ef9f69d04eb830fe3809557a71910cba6275d0a0482efb71f9661"
+    "sha512=b01897990a18ac8da7a88fb9ed8348175cefddf468173d3e28f784cd79ca0395061a3e6504b308eb79cf75035715f9e6e6d571b4fcc5dcd548f79762e495d892"
   ]
 }
