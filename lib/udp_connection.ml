@@ -249,10 +249,10 @@ let create ~ssrc (ip, port) =
         let r = Lwt_unix.read sock b 0 b_len >|= fun n -> `read n in
         let t = Lwt_unix.sleep (1. /. 5.) >|= fun () -> `timeout in
         Lwt.pick [ r; t ] >>= function
-        | `read n ->
-            L.trace (fun m ->
+        | `read _n ->
+            (* L.trace (fun m ->
                 m "got %d bytes from UDP (ssrc=%d) (rtcp? keepalive ack?)" n
-                  ssrc);
+                  ssrc); *)
             f ()
         | `timeout -> f ()
     in

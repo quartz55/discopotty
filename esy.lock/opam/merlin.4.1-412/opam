@@ -10,7 +10,7 @@ build: [
   ["dune" "runtest" "-p" "merlin,dot-merlin-reader" "-j" "1"] {with-test}
 ]
 depends: [
-  "ocaml" {>= "4.11" & < "4.12"}
+  "ocaml" {>= "4.12" & < "4.13"}
   "dune" {>= "2.7.0"}
   "dot-merlin-reader" {>= "4.0"}
   "yojson" {>= "1.6.0"}
@@ -65,12 +65,12 @@ See https://github.com/OCamlPro/opam-user-setup
 "
   {success & !user-setup:installed}
 ]
-x-commit-hash: "0916b10c76025f7cb0855c67324f72e344046d77"
+x-commit-hash: "35c3ad0fb4a1de53f6afb028961800e63b9363bd"
 url {
   src:
-    "https://github.com/ocaml/merlin/releases/download/v4.1-411/merlin-v4.1-411.tbz"
+    "https://github.com/ocaml/merlin/releases/download/v4.1-412/merlin-v4.1-412.tbz"
   checksum: [
-    "sha256=9e2e6fc799c93ce1f2c7181645eafa37f64e43ace062b69218e1c29ac459937d"
-    "sha512=6a2e2503d81b22b0cc292ca6853231e59c42a216acec0cb540d03791d201fe83641a3502e62660668ad5d30405698e2429efe072cfd38dc30229024267f7c0b8"
+    "sha256=fb4caede73bdb8393bd60e31792af74b901ae2d319ac2f2a2252c694d2069d8d"
+    "sha512=ec301e0f97e11c1c331478030372d373d381a0ddbb7f72c83f7baa4c2c6d4f26094c3398f56bcf3d40c1242044391369fd06e8cd2ccfe1f5d78467eb3e9d33be"
   ]
 }

@@ -2,7 +2,7 @@
  (name discord)
  (public_name discopotty)
  (preprocess
-  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv ppx_bitstring))
+  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
  (libraries
   discord_models
   discopotty.utils
@@ -14,7 +14,6 @@
   lwt
   lwt.unix
   lwt-pipe
-  bitstring
   angstrom
   angstrom-lwt-unix
   yojson

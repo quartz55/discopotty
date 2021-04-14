@@ -16,7 +16,6 @@
     "@discopotty/opus": "*",
     "@opam/angstrom": "0.15.0",
     "@opam/angstrom-lwt-unix": "0.15.0",
-    "@opam/bitstring": "4.1.0",
     "@opam/conf-libsodium": "*",
     "@opam/containers": "3.2",
     "@opam/containers-data": "3.2",
@@ -29,7 +28,6 @@
     "@opam/mtime": "1.2.0",
     "@opam/ocamlfind": "<1.9.0",
     "@opam/piaf": "*",
-    "@opam/ppx_bitstring": "4.1.0",
     "@opam/ppx_deriving": "5.2.1",
     "@opam/ppx_yojson_conv": "v0.14.0",
     "@opam/ptime": "0.8.5",
@@ -41,7 +39,7 @@
     "@opam/websocketaf-lwt-unix": "*",
     "@opam/yojson": "1.7.0",
     "esy-libsodium": "github:EduardoRFS/esy-libsodium#caeedd7",
-    "ocaml": "~4.11.0",
+    "ocaml": "~4.12.0",
     "relog": "*"
   },
   "devDependencies": {

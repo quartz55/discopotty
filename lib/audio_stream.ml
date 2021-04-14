@@ -131,9 +131,9 @@ module Ffmpeg = struct
 
   let stdout_args = [ "-" ]
 
-  let of_file filename =
+  let create input =
     let cmd = "ffmpeg" in
-    let args = List.concat [ [ "-i"; filename ]; pcm_args; stdout_args ] in
+    let args = List.concat [ [ "-i"; input ]; pcm_args; stdout_args ] in
 
     let p = Lwt_pipe.create () in
     let p_p, u_p = Lwt.wait () in
@@ -174,17 +174,15 @@ module Ffmpeg = struct
             match status with
             | Unix.WEXITED 0 ->
                 if Lwt.is_sleeping p_p then
-                  Lwt_result.fail (`Msg "0 byte stream?")
+                  Lwt.return (Error.msg "0 byte stream?")
                 else Lwt_result.return ()
             | WEXITED n ->
                 L.error (fun m ->
                     m "got non 0 status code for ffmpeg (status=%d)" n);
                 let+ logs = logs () in
                 L.error (fun m -> m "logs:@.%s" logs);
-                Error
-                  (`Msg
-                    (Printf.sprintf
-                       "got non 0 status code for ffmpeg (status=%d)\n%s" n logs))
+                Error.msgf "got non 0 status code for ffmpeg (status=%d)\n%s" n
+                  logs
             | WSIGNALED n | WSTOPPED n ->
                 L.warn (fun m -> m "ffmpeg process was closed with code=%d" n);
                 Lwt_result.return ()

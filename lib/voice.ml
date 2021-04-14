@@ -21,7 +21,7 @@ module Ws = struct
           Token_bucket.take tb >|= fun () ->
           Ws_conn.send conn pl;
           Ok ())
-    | Closed -> Lwt.return (Error (`Msg "cannot send payload to closed ws"))
+    | Closed -> Lwt.return (Error.msg "cannot send payload to closed ws")
 
   let send_exn t pl =
     Lwt.(

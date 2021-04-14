@@ -44,7 +44,7 @@ type partial = {
   channel_id : Snowflake.t;
   content : string option; [@yojson.option]
   timestamp : string option; [@yojson.option]
-  edited_timestamp : string;
+  edited_timestamp : string option; [@yojson.option]
 }
 [@@deriving of_yojson, show] [@@yojson.allow_extra_fields]
 

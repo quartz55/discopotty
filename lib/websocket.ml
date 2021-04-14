@@ -56,7 +56,7 @@ let connect_ssl host fd =
         | Ssl.Connection_error _ssl_error ->
             let msg = Ssl.get_error_string () in
             L.err (fun m -> m "error performing SSL handshake: %s" msg);
-            Lwt_result.fail (`Msg msg)
+            Lwt.return (Error.msg msg)
         | _ -> assert false)
   in
   match socket_or_error with
@@ -90,9 +90,7 @@ let open_socket ?(ssl = false) ?(port = if ssl then 443 else 80) host =
             (fun () -> Lwt_result.return ())
             (fun _exn -> inner xs)
       | [] ->
-          Lwt_result.fail
-            (`Msg
-              (Format.asprintf "couldn't connect socket to %s:%d" host port))
+          Lwt.return (Error.msgf "couldn't connect socket to %s:%d" host port)
     in
     inner addresses
   in
@@ -228,7 +226,7 @@ functor
                   rsp);
             let reason = rsp.reason in
             Lwt.wakeup_later u
-              (Error (`Msg ("failed to handshake websocket: " ^ reason)))
+              (Error.msgf "failed to handshake websocket: %s" reason)
         | _ -> assert false
       in
       let websocket_handler wsd =
@@ -324,7 +322,7 @@ functor
       | Error (`Redir loc) ->
           let host, port, ssl, resource = _uri_info (Uri.of_string loc) in
           _connect ~enc ~zlib ~ssl host port resource
-      | Error (`Msg _) as err -> Lwt.return err
+      | Error #Error.t as err -> Lwt.return err
       | Ok t -> Lwt.return (Ok t)
 
     let create ?(zlib = false) ?(enc = `json) uri =

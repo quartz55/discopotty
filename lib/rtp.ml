@@ -21,10 +21,12 @@ module Sync = struct
   let add_uint16_safe a b =
     let open Uint16 in
     if compare (max_int - b) a < 0 then a - (max_int - b) else a + b
+    [@@inline]
 
   let add_uint32_safe a b =
     let open Uint32 in
     if compare (max_int - b) a < 0 then a - (max_int - b) else a + b
+    [@@inline]
 
   let make () =
     let seq = Random.(run (int Int.(2 ** 16))) |> Uint16.of_int in

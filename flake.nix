@@ -15,7 +15,7 @@
           pkgs = import nixpkgs {
             inherit system;
           };
-          anmonteiro = import nixpkgs-2021_03_20 {
+          anmonteiro = import nixpkgs {
             inherit system;
             overlays = [ (import ocaml-overlays) ];
           };

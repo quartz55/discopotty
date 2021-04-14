@@ -60,7 +60,7 @@ let do_request :
     let err = ApiError.t_of_yojson (Yojson.Safe.from_string err_str) in
     L.warn (fun m ->
         m "http request failed %a@.%a" ApiError.pp err Piaf.Response.pp_hum res);
-    Lwt.return (Error (`Msg ("discord http error: " ^ ApiError.message err)))
+    Lwt.return (Error.msgf "discord http error: %a" ApiError.pp err)
 
 let get ?headers url t = do_request ?headers ~meth:`GET url t
 

@@ -13,6 +13,11 @@ how should I put it, /*hard*/ ...
 *** DOING Find a way to actually test this
 ...that doesn't involve just waiting for it to /(eventually)/ crash...
 
+Up to now I've been able to verify some things:
+- I probaly have to restart voice sessions as well
+- Base reconnection protocol (when receiving =RECONNECT= payload)
+is mostly working but getting a 1009 (message too big) after handshaking???
+
 ** DONE Refactor Session
 It needs to be self-managed (to handle automatic reconnections)
 but also expose an API in order to transparently communicate with
@@ -63,10 +68,12 @@ when building? /probably/
 - Is it worth it? /no/ (maybe it's actually worse given that ocaml-multicore isn't here yet 😿)
 - Is it fun? /yeah/ 😝
 
-** TODO youtube-dl support
+** DOING youtube-dl support
 
 ** TODO Custom ytdl-like implementation
 I reckon this is really only worth it if we do the libav thing.
+
+** DOING Player abstraction
 
 -------
 
@@ -105,8 +112,8 @@ Just a little helper to make it easier to build valid stylized messages
 
 ---------
 
-* DOING Model types & (de)serializers
-** DOING Complete Payloads types & (de)serializers
+* DONE Model types & (de)serializers
+** DONE Complete Payloads types & (de)serializers
 
 ---------
 

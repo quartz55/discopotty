@@ -9,7 +9,9 @@ type pcm_s16_frame =
 type pcm_f32_frame =
   (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t
 
-type silence_stream = bigstring Lwt_pipe.Reader.t
+type opus_frame = bigstring
+
+type silence_stream = opus_frame Lwt_pipe.Reader.t
 
 module Driver = struct
   type t = {
@@ -56,17 +58,15 @@ module Driver = struct
     let rec exhaust ?(i = 0) p =
       Lwt_pipe.read p >>= function
       | Some frame ->
-          play frame >>= fun ok ->
-          if ok then exhaust ~i:(i + 1) p
-          else if i = 0 then failwith "need to send at least 1 frame"
-          else Lwt.return (`Yield i)
+          play (i + 1) frame >>= fun ok ->
+          let i = i + 1 in
+          if ok then exhaust ~i p else Lwt.return (`Yield i)
       | None -> Lwt.return (`Closed i)
     in
     let framelen = float Rtp._FRAME_LEN /. 1e3 in
     let schedule_next ?drift ?(frames = 1) () =
       let timeout = float frames *. framelen in
       let with_drift d =
-        let d = Lazy.force d in
         let delta = Int64.(now () - d |> to_float) /. 1e9 in
         timeout -. Float.min delta timeout
       in
@@ -78,6 +78,7 @@ module Driver = struct
       Lwt_unix.sleep timeout >|= fun () -> `Tick
     in
     let last_yield = ref None in
+    let last_tick = ref (now ()) in
     let rec yield_till tick =
       let y =
         match !last_yield with
@@ -94,9 +95,15 @@ module Driver = struct
       | `Yield ->
           last_yield := None;
           yield_till tick
-      | `Tick -> Lwt.return_unit
+      | `Tick ->
+          let t = now () in
+          L.trace (fun m ->
+              let delta = Int64.(t - !last_tick |> to_float) in
+              m "tick +%2fms" (delta /. 1e6));
+          last_tick := t;
+          Lwt.return_unit
     in
-    let rec f' ?(drift = lazy (now ())) ?(i = 0) () =
+    let rec f' ?(drift = now ()) ?(i = 0) () =
       match (t.silence, t.state) with
       | _ when t.dead ->
           destroy_active t;
@@ -136,36 +143,36 @@ type t = { evloop_tx : evloop_msg Lwt_pipe.Writer.t }
 and evloop_msg = Stop | Play of pcm_s16_frame Lwt_pipe.Reader.t * Driver.waker
 
 let create_opus_encoder ?(frametype = `s16) () =
-  let open Opus in
   let open Result.Infix in
   let rec set_ctls ~l enc =
     match l with
-    | ctl :: l -> Encoder.ctl enc ctl >>= fun () -> set_ctls ~l enc
+    | ctl :: l -> Opus.Encoder.ctl enc ctl >>= fun () -> set_ctls ~l enc
     | [] -> Ok enc
   in
-  Encoder.create ~samplerate:Rtp._SAMPLE_RATE ~channels:`stereo
-    ~application:`Audio ()
-  >>= (fun enc ->
-        let shared =
-          CTL.
-            [
-              Set_signal `Music;
-              Set_bitrate `Max;
-              Set_complexity 10;
-              Set_packet_loss_perc 5;
-              Set_complexity 10;
-              Set_inband_FEC true;
-              Set_DTX false;
-            ]
-        in
-        let ctls =
-          match frametype with
-          | `s16 -> CTL.(Set_LSB_depth 16) :: shared
-          | `f32 -> CTL.(Set_LSB_depth 24) :: shared
-        in
-        set_ctls ~l:ctls enc)
-  |> Result.map_err (fun e ->
-         `Msg (Printf.sprintf "opus error: %s" (Opus.Error.to_string e)))
+  Opus.(
+    Encoder.create ~samplerate:Rtp._SAMPLE_RATE ~channels:`stereo
+      ~application:`Audio ()
+    >>= fun enc ->
+    let shared =
+      CTL.
+        [
+          Set_signal `Music;
+          Set_bitrate `Max;
+          Set_complexity 10;
+          Set_packet_loss_perc 5;
+          Set_inband_FEC true;
+          Set_DTX false;
+        ]
+    in
+    let ctls =
+      match frametype with
+      | `s16 -> CTL.(Set_LSB_depth 16) :: shared
+      | `f32 -> CTL.(Set_LSB_depth 24) :: shared
+    in
+    set_ctls ~l:ctls enc)
+  |> function
+  | Error e -> Error.msgf "opus error: %a" Opus.Error.pp e
+  | Ok v -> Ok v
 
 let create ?(burst = 15) voice =
   let ( let+ ) = Result.( let+ ) in
@@ -193,16 +200,9 @@ let create ?(burst = 15) voice =
     | `Req Stop -> Driver.stop driver
     | `Poison -> Driver.destroy driver
   in
-  let curr = ref 0 in
-  let play frame =
-    if !curr < burst then (
-      Voice.start_speaking voice >>= fun () ->
-      Voice.send_rtp voice frame >|= fun () ->
-      incr curr;
-      true)
-    else (
-      curr := 0;
-      Lwt.return false)
+  let play i frame =
+    Voice.start_speaking voice >>= fun () ->
+    Voice.send_rtp voice frame >|= fun () -> i < burst
   in
   let stop () = Voice.stop_speaking voice in
   let f = Driver.run ~yield ~play ~stop driver in

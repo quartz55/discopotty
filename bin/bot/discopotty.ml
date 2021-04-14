@@ -7,10 +7,20 @@ module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 let setup_logging () =
   let open Relog in
+  let v =
+    Option.(
+      Sys.getenv_opt "RELOG_LEVEL" >>= fun lvl ->
+      choice
+        [
+          Int.of_string lvl >>= Level.of_verbosity;
+          Level.of_string (String.lowercase_ascii lvl);
+        ])
+    |> Option.get_or ~default:Level.Debug
+  in
   let cli_fmter = Formatter.default ~color:true ~oneline:false () in
   let cli_fmt = Format.formatter_of_out_channel stderr in
   Sink.make (fun r ->
-      if Level.Infix.(Record.level r <= Debug) then cli_fmter cli_fmt r else ())
+      if Level.Infix.(Record.level r <= v) then cli_fmter cli_fmt r else ())
   |> Relog.Sink.set
 
 let handler cfg client =
@@ -45,18 +55,52 @@ let handler cfg client =
           D.Client.join_voice ~guild_id ~channel_id:v_channel_id client
       | Some ("play", "kiff") -> (
           let guild_id = Option.get_exn guild_id in
-          let* s = D.Audio_stream.Ffmpeg.of_file "./kiff.mp3" in
+          let* s = D.Audio_stream.Ffmpeg.create "./kiff.mp3" in
           match s with
           | Ok audio_stream ->
               D.Client.play_audio_stream ~guild_id audio_stream client
           | _ -> Lwt.return_unit)
       | Some ("play", "soundbite") -> (
           let guild_id = Option.get_exn guild_id in
-          let* s = D.Audio_stream.Ffmpeg.of_file "./bite2.mp3" in
+          let* s = D.Audio_stream.Ffmpeg.create "./bite2.mp3" in
           match s with
           | Ok audio_stream ->
               D.Client.play_audio_stream ~guild_id audio_stream client
           | _ -> Lwt.return_unit)
+      | Some ("play", "allstar") -> (
+          let guild_id = Option.get_exn guild_id in
+          let* s = D.Audio_stream.Ffmpeg.create "./allstar.mp3" in
+          match s with
+          | Ok audio_stream ->
+              D.Client.play_audio_stream ~guild_id audio_stream client
+          | _ -> Lwt.return_unit)
+      | Some ("play", query) -> (
+          let guild_id = Option.get_exn guild_id in
+          let* tracks = Ytdl.query query in
+          match tracks with
+          | Ok [] | Error _ ->
+              let msg = Msg.fmt "⚠️ No track found for query: '%s'" query in
+              D.Client.send_message channel_id msg client
+          | Ok (track :: _) -> (
+              let* s = D.Audio_stream.Ffmpeg.create track.url in
+              match s with
+              | Ok audio_stream ->
+                  let* () =
+                    D.Client.play_audio_stream ~guild_id audio_stream client
+                  in
+                  let msg =
+                    Msg.fmt "🎵 @{<b>Now playing:@} '%s'\n%s" track.title
+                      track.thumbnail
+                  in
+                  D.Client.send_message channel_id msg client
+              | Error e ->
+                  client
+                  |> D.Client.send_message channel_id
+                       (Msg.fmt "⚠️ Couldn't play track: '%s'\nReason: %a"
+                          track.title D.Error.pp e)))
+      | Some ("pause", _) ->
+          let _guild_id = Option.get_exn guild_id in
+          Lwt.return_unit
       | Some (other, _) ->
           let msg =
             Msg.fmt "🛑 @{<b>unsupported command@} @{<code>%s@}" other

@@ -21,7 +21,7 @@ module Ws = struct
           Token_bucket.take tb >|= fun () ->
           Ws_conn.send conn pl;
           Ok ())
-    | Closed -> Lwt.return (Error (`Msg "cannot send payload to closed ws"))
+    | Closed -> Lwt.return (Error.msg "cannot send payload to closed ws")
 
   let send_exn t pl =
     Lwt.(
@@ -338,12 +338,14 @@ let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
           let session = if resumable then Some (!info, ev_pipe) else None in
           hb.cancel ();
           Lwt_pipe.close_nonblock bus;
+          Ws.close ~code:`Abnormal_closure ws;
           (* TODO what to do in case of `false` again?? *)
           manage' ?session ()
       | Reconnect ->
           L.warn (fun m -> m "got reconnection request, obliging...");
           hb.cancel ();
           Lwt_pipe.close_nonblock bus;
+          Ws.close ~code:`Abnormal_closure ws;
           manage' ~session:(!info, ev_pipe) ()
       | Dispatch (seq, Ready _) | Dispatch (seq, Resumed) ->
           L.warn (fun m ->
@@ -357,7 +359,7 @@ let create ?(on_destroy = fun _ -> ()) ?(zlib = false)
     in
     poll' () >>= fun out ->
     hb.cancel ();
-    Ws.close ~code:`Going_away ws;
+    Ws.close ~code:`Normal_closure ws;
     Lwt_pipe.close_nonblock pipe;
     Lwt_pipe.close_nonblock pl_pipe;
     Lwt_pipe.close_nonblock bus;

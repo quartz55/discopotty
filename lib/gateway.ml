@@ -35,6 +35,14 @@ let get_gateway_url http =
            "wss://gateway.discord.gg")
   |> Lwt_result.ok
 
+let disconnect t =
+  SfMap.to_seq t.voice_sessions
+  |> Seq.map (fun (_, { conn; _ }) -> Voice.disconnect conn)
+  |> Seq.to_list |> Lwt.join
+  >>= fun () ->
+  t.voice_sessions <- SfMap.empty;
+  Session.disconnect t.session
+
 let connect ?http token =
   let open Lwt_result.Syntax in
   let* http =
@@ -46,14 +54,6 @@ let connect ?http token =
   and events = Session.events session |> Lwt_pipe.to_stream
   and voice_sessions = SfMap.empty in
   t
-
-let disconnect t =
-  SfMap.to_seq t.voice_sessions
-  |> Seq.map (fun (_, { conn; _ }) -> Voice.disconnect conn)
-  |> Seq.to_list |> Lwt.join
-  >>= fun () ->
-  t.voice_sessions <- SfMap.empty;
-  Session.disconnect t.session
 
 let user { session; _ } = Session.user session
 
