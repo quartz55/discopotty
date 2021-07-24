@@ -1,4 +1,7 @@
 (executable
  (name discopotty)
+ (package discopotty)
  (public_name discopotty)
- (libraries discord containers toml relog.lib angstrom))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
+ (libraries disco disco.voice containers toml relog.lib angstrom))

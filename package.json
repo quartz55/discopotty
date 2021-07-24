@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "description": "",
   "esy": {
-    "build": "dune build -p #{self.name} --profile=release",
-    "buildDev": "dune build --promote-install-files --root . --only-package #{self.name}"
+    "build": "dune build --profile=release",
+    "buildDev": "dune build --promote-install-files --root ."
   },
   "scripts": {
     "bot": "esy x discopotty",
@@ -14,48 +14,47 @@
   },
   "dependencies": {
     "@discopotty/opus": "*",
-    "@opam/angstrom": "0.15.0",
-    "@opam/angstrom-lwt-unix": "0.15.0",
+    "@opam/angstrom": "~0.15.0",
+    "@opam/angstrom-lwt-unix": "~0.15.0",
     "@opam/conf-libsodium": "*",
-    "@opam/containers": "3.2",
-    "@opam/containers-data": "3.2",
+    "@opam/containers": "~3.2",
+    "@opam/containers-data": "~3.2",
     "@opam/dune": ">=2.8",
     "@opam/httpaf-lwt-unix": "*",
-    "@opam/hxd": "0.3.1",
-    "@opam/ke": "0.4",
-    "@opam/lwt": "5.4.0",
-    "@opam/lwt-pipe": "0.1",
-    "@opam/mtime": "1.2.0",
+    "@opam/hxd": "~0.3.1",
+    "@opam/ke": ">=0.4",
+    "@opam/lwt": "~5.4.0",
+    "@opam/lwt-pipe": ">=0.1",
+    "@opam/mtime": "~1.2.0",
     "@opam/ocamlfind": "<1.9.0",
     "@opam/piaf": "*",
-    "@opam/ppx_deriving": "5.2.1",
+    "@opam/ppx_deriving": "~5.2.1",
     "@opam/ppx_yojson_conv": "v0.14.0",
-    "@opam/ptime": "0.8.5",
+    "@opam/ptime": "~0.8.5",
     "@opam/sodium": "*",
-    "@opam/stdint": "0.7.0",
-    "@opam/toml": "6.0.0",
-    "@opam/uri": "4.1.0",
+    "@opam/stdint": "~0.7.0",
+    "@opam/toml": "~6.0.0",
+    "@opam/uri": "~4.1.0",
     "@opam/websocketaf": "*",
     "@opam/websocketaf-lwt-unix": "*",
-    "@opam/yojson": "1.7.0",
+    "@opam/yojson": "~1.7.0",
     "esy-libsodium": "github:EduardoRFS/esy-libsodium#caeedd7",
     "ocaml": "~4.12.0",
-    "relog": "*"
+    // "ocaml": "*",
+    "relog": "github:quartz55/relog-native#e8ad43f"
   },
   "devDependencies": {
-    "@opam/alcotest": "1.3.0",
-    "@opam/alcotest-lwt": "1.3.0",
-    "@opam/earlybird": "*",
+    "@opam/alcotest": "*",
+    "@opam/alcotest-lwt": "*",
     "@opam/merlin": "*",
     "@opam/ocaml-lsp-server": "*",
     "@opam/ocamlformat": "*",
     "@opam/odoc": "*",
-    "@opam/qcheck-alcotest": "0.17",
-    "@opam/qcheck-core": "0.17",
-    "@opam/utop": "*"
+    "@opam/qcheck-alcotest": "*",
+    "@opam/qcheck-core": "*"
   },
   "resolutions": {
-    // "@opam/ocaml-lsp-server": "ocaml/ocaml-lsp:ocaml-lsp-server.opam#440e987",
+    // "ocaml": "quartz55/ocaml#ce3b1c98f",
     "@opam/httpaf": "anmonteiro/httpaf:httpaf.opam#0555dde",
     "@opam/httpaf-lwt": "anmonteiro/httpaf:httpaf-lwt.opam#0555dde",
     "@opam/httpaf-lwt-unix": "anmonteiro/httpaf:httpaf-lwt-unix.opam#0555dde",
@@ -90,8 +89,7 @@
         }
       }
     },
-    "esy-libopus": "./vendor/esy-libopus/package.json",
-    "relog": "quartz55/relog-native#46af429"
+    "esy-libopus": "./vendor/esy-libopus/package.json"
   },
   "repository": {
     "type": "git",

@@ -31,3 +31,4 @@ token.txt
 _esy
 *.install
 discopotty.toml
+.discostore

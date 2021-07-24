@@ -1,7 +1,7 @@
 (env
  (dev
   (flags
-   (:standard -warn-error -32)))
+   (:standard -warn-error -32-33)))
  (static
   (flags
    (:standard -ccopt -static))

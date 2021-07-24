@@ -1,8 +1,8 @@
 (tests
  (names token_bucket audio_stream)
- (package discopotty)
+ (package disco)
  (libraries
-  discord
+  disco
   relog.lib
   alcotest
   alcotest-lwt

@@ -1,11 +1,12 @@
 (library
- (name discord)
- (public_name discopotty)
+ (name disco)
+ (public_name disco)
  (preprocess
   (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
  (libraries
-  discord_models
-  discopotty.utils
+  disco.core
+  disco.models
+  disco.utils
   containers
   containers-data
   stdint

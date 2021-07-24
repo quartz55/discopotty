@@ -46,10 +46,10 @@ First should actually research how to do it in a worthwhile way
 
 [2021-2-23 Tue] /Nevermind: Sharding is useful if only to decrease rate limiting bottlenecks./
 
-** TODO Identify Concurrency handling
+** TODO =IDENTIFY= Concurrency handling
 A global lock/token bucket should suffice.
 Maybe make it a map of ~(bot token)->(token bucket)~ in case the user
-wants to run multiple different bots in a single application.
+wants to run multiple different bots in a single application 🤷‍♂️.
 
 -------
 
@@ -68,18 +68,25 @@ when building? /probably/
 - Is it worth it? /no/ (maybe it's actually worse given that ocaml-multicore isn't here yet 😿)
 - Is it fun? /yeah/ 😝
 
-** DOING youtube-dl support
+** DONE youtube-dl support
+*** DONE Seamless caching
+This is relatively simple to do given that youtube-dl already
+generates unique ids for each track.
 
 ** TODO Custom ytdl-like implementation
 I reckon this is really only worth it if we do the libav thing.
 
 ** DOING Player abstraction
+*** DOING Make an actual ~Audio_stream~ type
 
 -------
 
-* TODO Cache layer
+* DOING Cache layer
 Is it worth using something like [[https://github.com/mirage/irmin][Irmin]] here?
-** TODO Persistance layer
+
+-------
+
+* TODO Persistance layer
 I'm inclined towards a sqlite+caqti based approach
 
 -------
@@ -175,3 +182,9 @@ Doesn't have to be fully done, just comprehensive enough for now.
 
 * DONE Test framework
 Alcotest + QCheck 👍
+
+---------
+
+* TODO Cull dependencies on the various libraries
+* TODO Research on virtual/private libraries vs Functors
+Leaning on functors for now

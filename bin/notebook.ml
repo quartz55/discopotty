@@ -1,37 +1,57 @@
 open Containers
+open Lwt.Infix
+module Mpmc = Disco_utils.Mpmc
 
-let work () =
-  let sine_stream = Discord.Audio_stream.Gen.sine ~freq:1000 3. in
-  let buf = Bigstringaf.create (960 * 2 * 4) in
-  let fill_buff frame =
-    let f = Faraday.create (1024 * 4) in
-    Seq.(
-      0 --^ Bigarray.Array1.dim frame
-      |> iter (fun i -> Faraday.LE.write_float f frame.{i}));
-    Faraday.serialize_to_bigstring f
+let rec iter_sink n s =
+  Mpmc.Sink.pull s >>= function
+  | Some v ->
+      Printf.printf "(sink %d) %d\n%!" n v;
+      iter_sink n s
+  | None ->
+      Printf.printf "(sink %d) dropped\n%!" n;
+      Lwt.return_unit
+
+let rec write_all src l =
+  match l with
+  | [] -> Lwt.return_unit
+  | x :: xs -> Mpmc.Source.write src x >>= fun () -> write_all src xs
+
+let base () =
+  let open Lwt.Syntax in
+  let source, sink = Mpmc.make () in
+  let* sink2 =
+    Mpmc.Sink.clone sink >>= fun s ->
+    Mpmc.Sink.clone s >|= fun s2 -> s2
   in
-  sine_stream
-  |> Lwt_pipe.Reader.iter_s ~f:(fun frame ->
-         Lwt_io.write_from_exactly_bigstring Lwt_io.stdout (fill_buff frame) 0
-           (Bigstringaf.length buf))
+  Gc.full_major ();
 
-(* let () = Lwt_main.run (work ())*)
+  let reads = Lwt.join [ iter_sink 2 sink2 ] in
+  let writes =
+    Lwt.join [ write_all source List.(1 -- 10); write_all source List.(1 -- 5) ]
+    >>= fun () ->
+    Mpmc.Source.close source >>= fun () -> iter_sink 1 sink
+  in
+  Lwt.join [ reads; writes ]
 
-module Mpmc = Dp_utils.Mpmc
+let gc () =
+  let open Lwt.Syntax in
+  let src, snk = Mpmc.make () in
+  let clone_drop snk = Mpmc.Sink.clone snk >|= ignore in
+  let* () = clone_drop snk in
+  let* () = clone_drop snk in
+  Gc.full_major ();
+  Lwt.join
+    [
+      (write_all src List.(1 -- 5) >>= fun () -> Mpmc.Source.close src);
+      iter_sink 1 snk;
+    ]
 
 let () =
-  let source, sink = Mpmc.create () in
-  let sink2 = Mpmc.Sink.(clone sink |> map ~f:(fun i -> i * 2)) in
-  let _cancel =
-    Mpmc.Sink.iter sink2 ~f:(function
-      | Some v -> Printf.printf "(sink 2) %d\n%!" v
-      | None -> Printf.printf "(sink 2) dropped\n%!")
+  let runs = [ ("base", base); ("gc", gc) ] in
+  let rec run = function
+    | [] -> Lwt.return_unit
+    | (name, fn) :: xs ->
+        Printf.printf "\nrunning %s\n----------\n\n%!" name;
+        fn () >>= fun () -> run xs
   in
-  let _cancel =
-    Mpmc.Sink.iter sink ~f:(function
-      | Some v -> Printf.printf "(sink 1) %d\n%!" v
-      | None -> Printf.printf "(sink 1) dropped\n%!")
-  in
-  Seq.(1 -- 10 |> iter (fun v -> Mpmc.Source.write source v |> ignore));
-  Seq.(1 -- 5 |> iter (fun v -> Mpmc.Source.write source v |> ignore));
-  Mpmc.Source.close source
+  Lwt_main.run @@ run runs

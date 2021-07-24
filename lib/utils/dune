@@ -1,6 +1,6 @@
 (library
- (name dp_utils)
- (public_name discopotty.utils)
+ (name disco_utils)
+ (public_name disco.utils)
  (preprocess
   (pps ppx_deriving.show ppx_deriving.ord))
  (libraries

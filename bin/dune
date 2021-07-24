@@ -4,4 +4,4 @@
  (modes byte)
  (modules notebook)
  (package discopotty)
- (libraries discord discopotty.utils containers))
+ (libraries disco disco.utils containers))

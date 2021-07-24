@@ -1,234 +1,144 @@
-open Containers
+open! Containers
+open Lwt.Infix
 
-type 'a sink = {
+module MakeCache (T : Ephemeron.SeededS) = struct
+  module Table = T
+
+  type key = Table.key
+
+  type 'a t = 'a Table.t * Lwt_mutex.t
+
+  let make () = (Table.create ~random:true 32, Lwt_mutex.create ())
+
+  let access (table, lock) f =
+    Lwt_mutex.with_lock lock @@ fun () -> table |> f |> Lwt.return
+
+  let add t ~key value = access t @@ fun table -> Table.add table key value
+
+  let find t ~key = access t @@ fun table -> Table.find table key
+
+  let find_opt t ~key = access t @@ fun table -> Table.find_opt table key
+
+  let iter t ~f = access t @@ fun table -> Table.iter f table
+
+  let mem t ~key = access t @@ fun table -> Table.mem table key
+
+  let remove t ~key = access t @@ fun table -> Table.remove table key
+
+  let reset t = access t Table.reset
+
+  let clean t = access t Table.clean
+
+  let of_seq seq =
+    let tbl, mtx = make () in
+    Seq.iter (fun (k, v) -> Table.add tbl k v) seq;
+    (tbl, mtx)
+end
+
+type key = K of int
+
+module Cache = MakeCache (Ephemeron.K1.MakeSeeded (struct
+  let equal (K l) (K r) = l = r
+
+  let hash = Hashtbl.seeded_hash
+
+  type t = key
+end))
+
+type 'a source = { sinks : 'a sink Cache.t; mutable closed : bool }
+
+and 'a sink = {
   mutable readers : 'a reader Ke.Fke.t;
   mutable buf : 'a Ke.Fke.t;
   mutable dropped : bool;
-  clone : unit -> 'a sink;
 }
 
-and 'a reader = { mutable canceled : bool; dispatch : 'a option -> unit }
+and 'a reader = 'a option Lwt.t * 'a option Lwt.u
 
-type 'a source = { mutable sinks : 'a sink Weak.t; mutable closed : bool }
+type 'a handle = { key : Cache.key; source : 'a source }
 
-let stub = Sys.opaque_identity (fun () -> ())
+let gen_key () =
+  Random.self_init ();
+  K (Random.bits ())
+
+let make_sink () =
+  { readers = Ke.Fke.empty; buf = Ke.Fke.empty; dropped = false }
+
+let connect source sink =
+  let sink = { sink with dropped = source.closed } in
+  let key = gen_key () in
+  Cache.add source.sinks ~key sink >|= fun () -> { key; source }
+
+let drop_sink t =
+  if not t.dropped then (
+    t.dropped <- true;
+    Ke.Fke.iter
+      (fun (p, u) -> if Lwt.is_sleeping p then Lwt.wakeup_later u None)
+      t.readers;
+    t.readers <- Ke.Fke.empty)
 
 module Sink = struct
-  type 'a t = 'a sink
+  type 'a t = 'a handle
 
-  let clone t =
-    if t.dropped then failwith "cannot clone dropped sink";
-    let s = t.clone () in
-    s.buf <- t.buf;
-    s
+  let get { key; source } = Cache.find source.sinks ~key
 
-  let rec make ?clone () =
-    {
-      readers = Ke.Fke.empty;
-      buf = Ke.Fke.empty;
-      dropped = false;
-      clone = clone |> Option.get_or ~default:(fun () -> make ());
-    }
+  let peek t = get t >|= fun t -> Ke.Fke.peek t.buf
 
-  let peek t = Ke.Fke.peek t.buf
-
-  let read_opt t =
+  let pull t =
+    get t >>= fun t ->
     match Ke.Fke.pop t.buf with
-    | Some (a, tl) ->
+    | Some (v, tl) ->
         t.buf <- tl;
-        Some a
-    | None -> None
-
-  let schedule_read t ~f =
-    match read_opt t with
-    | Some a ->
-        f (Some a);
-        stub
-    | None when t.dropped ->
-        f None;
-        stub
+        Lwt.return @@ Some v
+    | None when t.dropped -> Lwt.return None
     | None ->
-        let r = { canceled = false; dispatch = f } in
-        t.readers <- Ke.Fke.push t.readers r;
-        fun () -> if not r.canceled then r.canceled <- true
+        let p, u = Lwt.task () in
+        t.readers <- Ke.Fke.push t.readers (p, u);
+        p
 
-  let push t v =
-    if t.dropped then false
-    else
-      let rec f q =
-        match Ke.Fke.pop q with
-        | Some ({ canceled = true; _ }, tl) ->
-            print_endline "skipping cancelled reader";
-            f tl
-        | Some ({ dispatch; _ }, tl) ->
-            print_endline "waking up reader";
-            t.readers <- tl;
-            dispatch (Some v)
-        | None ->
-            print_endline "pushed to buffer";
-            t.readers <- Ke.Fke.empty;
-            t.buf <- Ke.Fke.push t.buf v
-      in
-      f t.readers;
-      true
+  let drop t = get t >|= drop_sink
 
-  let drop t =
-    if not t.dropped then (
-      t.dropped <- true;
-      Ke.Fke.iter
-        (function
-          | { canceled = true; _ } -> () | { dispatch; _ } -> dispatch None)
-        t.readers;
-      t.readers <- Ke.Fke.empty)
-
-  let map ~f t =
-    let o = make () in
-    let rec fwd = function
-      | Some v ->
-          if push o (f v) then schedule_read t ~f:fwd |> ignore else drop o
-      | None -> drop o
-    in
-    schedule_read t ~f:fwd |> ignore;
-    o
-
-  let filter ~f t =
-    let o = make () in
-    let rec fwd = function
-      | Some v when f v ->
-          if push o v then schedule_read t ~f:fwd |> ignore else drop o
-      | Some _ -> schedule_read t ~f:fwd |> ignore
-      | None -> drop o
-    in
-    schedule_read t ~f:fwd |> ignore;
-    o
-
-  let iter t ~f =
-    let cancel = ref stub in
-    let rec iter' = function
-      | Some v ->
-          f (Some v);
-          cancel := schedule_read t ~f:iter'
-      | None -> f None
-    in
-    cancel := schedule_read t ~f:iter';
-    fun () -> !cancel ()
-
-  let rec merge sinks =
-    let ks = ref @@ ((1 lsl List.length sinks) - 1) in
-    let o = make ~clone:(fun () -> List.map clone sinks |> merge) () in
-    let c = Array.make (List.length sinks) stub in
-    let cancel () = Array.iter (fun c -> c ()) c in
-    let rec fwd i k = function
-      | Some v ->
-          if push o v then c.(i) <- schedule_read k ~f:(fwd i k)
-          else (
-            cancel ();
-            List.iter drop sinks)
-      | None ->
-          ks := !ks land lnot (1 lsl i);
-          if !ks = 0 then drop o
-    in
-    List.iteri (fun i k -> c.(i) <- schedule_read k ~f:(fwd i k)) sinks;
-    o
-
-  module Lwt = struct
-    let read t =
-      let p, u = Lwt.task () in
-      let cancel = schedule_read t ~f:(Lwt.wakeup_later u) in
-      Lwt.on_cancel p cancel;
-      p
-
-    let iter_s ~f t =
-      let open Lwt.Infix in
-      let rec iter () =
-        read t >>= function Some v -> f v >>= iter | None -> Lwt.return_unit
-      in
-      iter ()
-
-    let iter_p ~f t =
-      let open Lwt.Infix in
-      let rec cleanup ?(acc = []) = function
-        | [] -> Ok acc
-        | p :: ps -> (
-            match Lwt.state p with
-            | Lwt.Fail e -> Error e
-            | Lwt.Sleep -> cleanup ~acc:(p :: acc) ps
-            | Lwt.Return _ -> cleanup ~acc ps)
-      in
-      let rec join ?(acc = []) () =
-        read t >>= function
-        | None -> Lwt.join acc
-        | Some v -> (
-            match cleanup acc with
-            | Ok acc -> join ~acc:(f v :: acc) ()
-            | Error exn -> Lwt.fail exn)
-      in
-      join ()
-  end
+  let clone t = get t >>= fun sink -> connect t.source sink
 end
 
 module Source = struct
   type 'a t = 'a source
 
-  let sinks t =
-    Seq.(0 --^ Weak.length t.sinks) |> Seq.filter_map (Weak.get t.sinks)
+  let make ?(sinks = Cache.make ()) () = { sinks; closed = false }
 
-  let write t x =
-    if t.closed then false
-    else
-      sinks t
-      |> Seq.filter (fun s -> not @@ s.dropped)
-      |> Seq.fold (fun flag s -> flag || Sink.push s x) false
+  let subscribe source = make_sink () |> connect source
 
-  let close t =
-    t.closed <- true;
-    sinks t |> Seq.iter Sink.drop
+  let write source v =
+    let f _ sink =
+      (* Printf.printf "handle %d: " k; *)
+      if sink.dropped then ()
+      else
+        let rec f q =
+          match Ke.Fke.pop q with
+          | Some ((p, u), tl) when Lwt.is_sleeping p ->
+              (* print_endline "waking up reader"; *)
+              sink.readers <- tl;
+              Lwt.wakeup_later u @@ Some v
+          | Some (_, tl) ->
+              (* print_endline "skipping cancelled reader"; *)
+              f tl
+          | None ->
+              (* print_endline "pushed to buffer"; *)
+              sink.readers <- Ke.Fke.empty;
+              sink.buf <- Ke.Fke.push sink.buf v
+        in
+        f sink.readers
+    in
+    Cache.iter source.sinks ~f
+
+  let close source =
+    if source.closed then Lwt.return_unit
+    else Cache.iter source.sinks ~f:(fun _ -> drop_sink)
 end
 
-let grow t =
-  let len = Weak.length t.sinks in
-  if Obj.Ephemeron.max_ephe_length - len < len then
-    failwith "reached maximum number of sinks";
-  let w = Weak.create (len * 2) in
-  Weak.blit t.sinks 0 w 0 len;
-  t.sinks <- w
-
-let get_free_sink_ref t =
-  let len = Weak.length t.sinks in
-  let rec f' ?(i = 0) w =
-    if i >= len then None
-    else
-      match Weak.get w i with
-      | None -> Some i
-      | Some c when c.dropped -> Some i
-      | Some _ -> f' ~i:(i + 1) w
-  in
-  match f' t.sinks with
-  | Some i -> i
-  | None ->
-      grow t;
-      len
-
-let create () =
-  let sinks = Weak.create 4 in
-  let source = { sinks; closed = false } in
-  let rec make_sink () =
-    let r = get_free_sink_ref source in
-    let sink =
-      {
-        readers = Ke.Fke.empty;
-        buf = Ke.Fke.empty;
-        dropped = false;
-        clone = make_sink;
-      }
-    in
-    Gc.finalise
-      (fun k ->
-        Printf.printf "gc'ing sink with %d buffered elements and %d readers\n%!"
-          (Ke.Fke.length k.buf) (Ke.Fke.length k.readers);
-        Sink.drop k)
-      sink;
-    Weak.set source.sinks r (Some sink);
-    sink
-  in
-  (source, make_sink ())
+let make () =
+  let sink = make_sink () in
+  let key = gen_key () in
+  let sinks = Seq.pure (key, sink) |> Cache.of_seq in
+  let source = Source.make ~sinks () in
+  (source, { key; source })

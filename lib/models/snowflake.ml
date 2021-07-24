@@ -28,3 +28,5 @@ let pp fmt t =
 let compare l r = Int64.compare (timestamp l) (timestamp r)
 
 let ( = ) = Int64.equal
+
+let ( <> ) a b = not (a = b)

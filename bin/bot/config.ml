@@ -13,7 +13,7 @@ let of_filename filename =
       let+ token =
         Toml.Lenses.(get tbl (key "auth" |-- table |-- key "token" |-- string))
         |> Option.to_result_lazy (fun () ->
-               Format.asprintf "Invalid configuration: missing [auth.token]@.")
+               `Msg "Invalid configuration: missing [auth.token]")
       in
       let prefix =
         Toml.Lenses.(
@@ -22,8 +22,7 @@ let of_filename filename =
       in
       { token; prefix }
   | `Error (_, loc) ->
-      Error
-        (Format.asprintf
-           "Invalid TOML in configuration: @[file='%s'@] @[line=%d@] \
-            @[column=%d@]@."
-           filename loc.line loc.column)
+      Error.msgf
+        "Invalid TOML in configuration: @[file='%s'@] @[line=%d@] \
+         @[column=%d@]@."
+        filename loc.line loc.column
