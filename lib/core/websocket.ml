@@ -240,7 +240,9 @@ functor
       in
       let websocket_handler wsd =
         let stream, push = Lwt_stream.create () in
-        let close_stream () = push None in
+        let close_stream () =
+          if not @@ Lwt_stream.is_closed stream then push None
+        in
         Lwt.wakeup_later u
           (Ok { info = conn_info; wsd; stream = (stream, close_stream) });
         let do_read ~on_done payload =
@@ -270,7 +272,10 @@ functor
               L.debug (fun m ->
                   m "consumer stream is closed, ignoring frame...")
           | `Connection_close when len < 2 ->
-              L.warn (fun m -> m "no close code in frame, defaulting to 1000")
+              L.warn (fun m -> m "no close code in frame, defaulting to 1000");
+              push (Some (Close `Going_away));
+              close_stream ();
+              Websocketaf.Wsd.close wsd
           | `Connection_close ->
               let on_done frame =
                 let close_code =
@@ -279,7 +284,8 @@ functor
                 L.warn (fun m ->
                     m "got close frame with code=%a" Close_code.pp close_code);
                 push (Some (Close close_code));
-                push None
+                close_stream ();
+                Websocketaf.Wsd.close wsd
               in
               do_read payload ~on_done
           | `Binary | `Text ->

@@ -9,6 +9,7 @@ type t = {
   mentionable : bool;
   tags : tags option; [@yojson.option]
 }
+[@@yojson.allow_extra_fields]
 
 and tags = {
   bot_id : Snowflake.t option; [@yojson.option]

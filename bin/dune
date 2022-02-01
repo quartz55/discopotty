@@ -4,4 +4,4 @@
  (modes byte)
  (modules notebook)
  (package discopotty)
- (libraries disco disco.utils containers))
+ (libraries disco disco.utils containers eio eio_luv))

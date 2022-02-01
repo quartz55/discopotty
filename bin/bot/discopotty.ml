@@ -67,7 +67,7 @@ let handler cfg _ytdl client =
           let vchan = M.Snowflake.of_string vchan in
           let voice = Client.voice client in
           let call = Voice.Manager.get ~guild_id voice in
-          Voice.Manager.Call.join call ~channel_id:vchan >>= function
+          Voice.Call.join call ~channel_id:vchan >>= function
           | Error e ->
               let msg =
                 Msg.fmt "⚠️ Couldn't join voice channel: %a" Voice.Error.pp
@@ -79,7 +79,7 @@ let handler cfg _ytdl client =
           let guild_id = Option.get_exn guild_id in
           let voice = Client.voice client in
           let call = Voice.Manager.get ~guild_id voice in
-          Voice.Manager.Call.leave call
+          Voice.Call.leave call
       (* | Some ("join", v_channel_id) ->
              let guild_id = Option.get_exn guild_id in
              let channel_id = M.Snowflake.of_string v_channel_id in

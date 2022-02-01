@@ -1,57 +1,76 @@
-open Containers
-open Lwt.Infix
-module Mpmc = Disco_utils.Mpmc
+open Eio.Std
 
-let rec iter_sink n s =
-  Mpmc.Sink.pull s >>= function
-  | Some v ->
-      Printf.printf "(sink %d) %d\n%!" n v;
-      iter_sink n s
-  | None ->
-      Printf.printf "(sink %d) dropped\n%!" n;
-      Lwt.return_unit
+let run_client ~net ~addr =
+  traceln "Connecting to server...";
+  Switch.run @@ fun sw ->
+  let flow = Eio.Net.connect ~sw net addr in
+  Eio.Flow.copy_string "Hello from client" flow
 
-let rec write_all src l =
-  match l with
-  | [] -> Lwt.return_unit
-  | x :: xs -> Mpmc.Source.write src x >>= fun () -> write_all src xs
-
-let base () =
-  let open Lwt.Syntax in
-  let source, sink = Mpmc.make () in
-  let* sink2 =
-    Mpmc.Sink.clone sink >>= fun s ->
-    Mpmc.Sink.clone s >|= fun s2 -> s2
+let run_server socket =
+  Switch.run @@ fun sw ->
+  let rec loop () =
+    Eio.Net.accept_sub socket ~sw
+      (fun ~sw:_ flow _addr ->
+        traceln "Server accepted connection from client";
+        let b = Buffer.create 100 in
+        Eio.Flow.copy flow (Eio.Flow.buffer_sink b);
+        traceln "Server received: %S" (Buffer.contents b))
+      ~on_error:(traceln "Error handling connection: %a" Fmt.exn);
+    loop ()
   in
-  Gc.full_major ();
+  loop ()
 
-  let reads = Lwt.join [ iter_sink 2 sink2 ] in
-  let writes =
-    Lwt.join [ write_all source List.(1 -- 10); write_all source List.(1 -- 5) ]
-    >>= fun () ->
-    Mpmc.Source.close source >>= fun () -> iter_sink 1 sink
-  in
-  Lwt.join [ reads; writes ]
-
-let gc () =
-  let open Lwt.Syntax in
-  let src, snk = Mpmc.make () in
-  let clone_drop snk = Mpmc.Sink.clone snk >|= ignore in
-  let* () = clone_drop snk in
-  let* () = clone_drop snk in
-  Gc.full_major ();
-  Lwt.join
-    [
-      (write_all src List.(1 -- 5) >>= fun () -> Mpmc.Source.close src);
-      iter_sink 1 snk;
-    ]
+let main ~net ~addr =
+  Switch.run @@ fun sw ->
+  let server = Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:5 addr in
+  traceln "Server ready...";
+  Fibre.both (fun () -> run_server server) (fun () -> run_client ~net ~addr)
 
 let () =
-  let runs = [ ("base", base); ("gc", gc) ] in
-  let rec run = function
-    | [] -> Lwt.return_unit
-    | (name, fn) :: xs ->
-        Printf.printf "\nrunning %s\n----------\n\n%!" name;
-        fn () >>= fun () -> run xs
-  in
-  Lwt_main.run @@ run runs
+  Eio_luv.run @@ fun env ->
+  main ~net:(Eio.Stdenv.net env) ~addr:(`Tcp (Eio.Net.Ipaddr.V4.loopback, 1337))
+
+(*
+   open EffectHandlers
+   open EffectHandlers.Deep
+
+   type ('elt, 'container) iter = ('elt -> unit) -> 'container -> unit
+   type 'elt gen = unit -> 'elt option
+
+   let generate (type elt) (i : (elt, 'container) iter) (c : 'container) : elt gen
+       =
+     let module M = struct
+       type _ eff += Yield : elt -> unit eff
+     end in
+     let open M in
+     let rec step =
+       ref (fun () ->
+           i (fun v -> perform (Yield v)) c;
+           (step := fun () -> None);
+           None)
+     in
+     let loop () =
+       try_with !step ()
+         {
+           effc =
+             (fun (type a) (e : a eff) ->
+               match e with
+               | Yield v ->
+                   Some
+                     (fun (k : (a, _) continuation) ->
+                       step := continue k;
+                       Some v)
+               | _ -> None);
+         }
+     in
+     loop
+
+   let gen_list : 'a list -> 'a gen = generate List.iter
+   let gl : int gen = gen_list [ 1; 2; 3 ]
+
+   let () =
+     assert (Some 1 = gl ());
+     assert (Some 2 = gl ());
+     assert (Some 3 = gl ());
+     assert (None = gl ());
+     assert (None = gl ()) *)

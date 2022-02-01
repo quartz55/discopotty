@@ -173,7 +173,7 @@ let create_opus_encoder ?(frametype = `s16) () =
   | Error e -> Error.msgf "opus error: %a" Opus.Error.pp e
   | Ok v -> Ok v
 
-let create ?(burst = 15) voice =
+let create ?(burst = 15) out =
   let ( let+ ) = Result.( let+ ) in
   let chan = Lwt_pipe.create () in
   let evloop_tx = Lwt_pipe.Writer.map ~f:(fun msg -> `Req msg) chan in
@@ -199,11 +199,8 @@ let create ?(burst = 15) voice =
     | `Req Stop -> Driver.stop driver
     | `Poison -> Driver.destroy driver
   in
-  let play i frame =
-    Session.start_speaking voice >>= fun () ->
-    Session.send_rtp voice frame >|= fun () -> i < burst
-  in
-  let stop () = Session.stop_speaking voice in
+  let play i frame = out (`Play frame) >|= fun r -> r && i < burst in
+  let stop () = out `Stop >|= ignore in
   let f = Driver.run ~yield ~play ~stop driver in
   Lwt_pipe.keep chan f;
   Lwt_pipe.link_close chan ~after:evloop_tx;
