@@ -11,19 +11,17 @@
   stdint
   relog.lib
   uri
-  lwt
-  lwt.unix
-  lwt-pipe
+  mirage-crypto-rng.unix
+  tls
+  httpaf
+  eio
+  eio.unix
   angstrom
-  angstrom-lwt-unix
   yojson
   mtime
   mtime.clock.os
   hxd.core
   hxd.string
-  piaf
   sodium
   opus
-  websocketaf
-  websocketaf-lwt-unix
-  httpaf-lwt-unix))
+  websocketaf))

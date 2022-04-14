@@ -1,16 +1,14 @@
 open Containers
-open Lwt.Infix
 module D = Disco
 module Voice = Disco_voice
-module Client = D.Client.Make (Voice.Manager)
+module Client = D.Client
 module M = Disco_models
 module Msg = M.Message
-
 module L = (val Relog.logger ~namespace:"Discopotty" ())
 
 let setup_logging () =
   let open Relog in
-  let v =
+  let verbosity =
     Option.(
       Sys.getenv_opt "LOG_LEVEL" >>= fun lvl ->
       choice
@@ -22,20 +20,26 @@ let setup_logging () =
   in
   let cli_fmter = Formatter.default ~color:true ~oneline:false () in
   let cli_fmt = Format.formatter_of_out_channel stderr in
-  Sink.make (fun r ->
-      if Level.Infix.(Record.level r <= v) then cli_fmter cli_fmt r else ())
-  |> Relog.Sink.set
+  let mtx = Mutex.create () in
+  let handler r =
+    if Level.Infix.(Record.level r <= verbosity) then (
+      Mutex.lock mtx;
+      Fun.protect
+        ~finally:(fun () -> Mutex.unlock mtx)
+        (fun () -> cli_fmter cli_fmt r))
+    else ()
+  in
+  Sink.make handler |> Relog.Sink.set
 
-let handler cfg _ytdl client =
+let handler cfg client =
   let prefix = Config.prefix cfg in
-  Lwt_unix.on_signal Sys.sigint (fun _ ->
-      Lwt.dont_wait (fun () -> Client.disconnect client) ignore)
-  |> ignore;
-  let open Lwt.Syntax in
+  Sys.set_signal Sys.sigint
+    (Sys.Signal_handle (fun _ -> Client.disconnect client));
   function
-  | Disco_core.Events.Message_create { content; channel_id; guild_id; _ } -> (
+  | Disco_core.Events.Message_create { content; channel_id; guild_id = _; _ }
+    -> (
       match Cmd.of_message ~prefix content with
-      | None -> Lwt.return ()
+      | None -> ()
       | Some ("ping", args) ->
           let msg = Msg.fmt "@{<b>pong@} %s" args in
           Client.send_message channel_id msg client
@@ -43,7 +47,7 @@ let handler cfg _ytdl client =
           let msg =
             Msg.fmt "⚠️ @{<b>@{<i>disconnecting by user request...@}@} 👋"
           in
-          let* () = Client.send_message channel_id msg client in
+          Client.send_message channel_id msg client;
           Client.disconnect client
       | Some ("status", st) ->
           let st =
@@ -58,28 +62,26 @@ let handler cfg _ytdl client =
           Disco_core.Gateway.send_presence_update gw ~afk:false st
       | Some ("join", "") ->
           let msg =
-            Msg.fmt
-              "⚠️ Not supported yet, please provide a voice channel id"
+            Msg.fmt "⚠️ Not supported yet, please provide a voice channel id"
           in
           Client.send_message channel_id msg client
-      | Some ("join", vchan) -> (
-          let guild_id = Option.get_exn guild_id in
-          let vchan = M.Snowflake.of_string vchan in
-          let voice = Client.voice client in
-          let call = Voice.Manager.get ~guild_id voice in
-          Voice.Call.join call ~channel_id:vchan >>= function
-          | Error e ->
-              let msg =
-                Msg.fmt "⚠️ Couldn't join voice channel: %a" Voice.Error.pp
-                  e
-              in
-              Client.send_message channel_id msg client
-          | Ok () -> Lwt.return_unit)
-      | Some ("leave", _) ->
-          let guild_id = Option.get_exn guild_id in
-          let voice = Client.voice client in
-          let call = Voice.Manager.get ~guild_id voice in
-          Voice.Call.leave call
+      (* | Some ("join", vchan) -> (
+             let guild_id = Option.get_exn guild_id in
+             let vchan = M.Snowflake.of_string vchan in
+             let voice = Client.voice client in
+             let call = Voice.Manager.get ~guild_id voice in
+             Voice.Call.join call ~channel_id:vchan >>= function
+             | Error e ->
+                 let msg =
+                   Msg.fmt "⚠️ Couldn't join voice channel: %a" Voice.Error.pp e
+                 in
+                 Client.send_message channel_id msg client
+             | Ok () -> Lwt.return_unit)
+         | Some ("leave", _) ->
+             let guild_id = Option.get_exn guild_id in
+             let voice = Client.voice client in
+             let call = Voice.Manager.get ~guild_id voice in
+             Voice.Call.leave call *)
       (* | Some ("join", v_channel_id) ->
              let guild_id = Option.get_exn guild_id in
              let channel_id = M.Snowflake.of_string v_channel_id in
@@ -128,27 +130,22 @@ let handler cfg _ytdl client =
                           (Msg.fmt "⚠️ Couldn't play track: '%s'\nReason: %a"
                              track.title Error.pp e))) *)
       | Some (other, _) ->
-          let msg =
-            Msg.fmt "🛑 @{<b>unsupported command@} @{<code>%s@}" other
-          in
+          let msg = Msg.fmt "🛑 @{<b>unsupported command@} @{<code>%s@}" other in
           Client.send_message channel_id msg client)
-  | _ ->
-      L.debug (fun m -> m "don't care");
-      Lwt.return ()
+  | _ -> L.debug (fun m -> m "don't care")
+
+let main env =
+  Gc.(set { (get ()) with minor_heap_size = 256000 * 4 });
+  Printexc.record_backtrace true;
+  setup_logging ();
+  let config = Config.of_filename "./discopotty.toml" in
+  let token = Config.token config in
+  try Client.run ~env ~handler:(handler config) token
+  with e ->
+    L.err (fun m ->
+        m "fatal exception: %s@.%s" (Printexc.to_string e)
+          (Printexc.get_backtrace ()));
+    exit (-1)
 
 let () =
-  Gc.(set { (get ()) with minor_heap_size = 256000 * 4 });
-  (Lwt.async_exception_hook :=
-     fun exn -> L.err (fun m -> m "async exn: %a" Error.pp (`Exn exn)));
-  let inner () =
-    let open Result.Infix in
-    setup_logging ();
-    let* config = Config.of_filename "./discopotty.toml" in
-    let* ytdl = Ytdl.create () in
-    let token = Config.token config in
-    Lwt_main.run (Client.run ~handler:(handler config ytdl) token)
-  in
-  match inner () with
-  | Ok () -> ()
-  | Error error -> prerr_endline (Error.to_string error)
-  | exception e -> prerr_endline Error.(of_exn e |> to_string)
+  Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () -> Eio_luv.run main

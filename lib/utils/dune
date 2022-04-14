@@ -8,6 +8,9 @@
   containers-data
   ke
   stdint
+  eio
+  eio.unix
+  eio.utils
   lwt
   lwt.unix
   mtime

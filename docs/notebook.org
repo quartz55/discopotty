@@ -41,10 +41,7 @@ WebsocketAF was the issue: fixed parser buffer size of 4kb
 Submitted a PR [[https://github.com/anmonteiro/websocketaf/pull/25][here]]
 
 * TODO Sharding
-First should actually research how to do it in a worthwhile way
-+(since we are essencially stuck in single-threaded mode for now)+
-
-[2021-2-23 Tue] /Nevermind: Sharding is useful if only to decrease rate limiting bottlenecks./
+/Sharding is useful if only to decrease rate limiting bottlenecks./
 
 ** TODO =IDENTIFY= Concurrency handling
 A global lock/token bucket should suffice.
@@ -81,20 +78,13 @@ I reckon this is really only worth it if we do the libav thing.
 
 -------
 
-* DOING Cache layer
+* TODO Cache layer
 Is it worth using something like [[https://github.com/mirage/irmin][Irmin]] here?
 
 -------
 
 * TODO Persistance layer
 I'm inclined towards a sqlite+caqti based approach
-
--------
-
-* DOING Error type
-Still not quite sure what the best approach is here.
-I guess time will tell, as needs come by.
-/(or a good examle while looking at sources 👀)/
 
 -------
 

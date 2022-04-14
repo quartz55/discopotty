@@ -1,0 +1,248 @@
+open! Globals
+open Eio.Std
+module L = (val Relog.logger ~namespace:__MODULE__ ())
+
+module type IO = sig
+  type socket
+  type addr
+
+  val read :
+    socket -> Bigstringaf.t -> off:int -> len:int -> [ `Eof | `Ok of int ]
+  (** The region [(off, off + len)] is where read bytes can be written to *)
+
+  val writev :
+    socket -> Faraday.bigstring Faraday.iovec list -> [ `Closed | `Ok of int ]
+
+  val shutdown_send : socket -> unit
+  val shutdown_receive : socket -> unit
+  val close : socket -> unit
+end
+
+module type Client = sig
+  type t
+  type socket
+
+  val create :
+    sw:Switch.t ->
+    read_buffer_size:int ->
+    protocol:'t Gluten.runtime ->
+    't ->
+    socket ->
+    t
+
+  val upgrade : t -> Gluten.impl -> unit
+  val shutdown : t -> unit
+  val is_closed : t -> bool
+end
+
+module Qe = Ke.Rke.Weighted
+
+module Buffer = struct
+  type t = (char, Bigarray.int8_unsigned_elt) Qe.t
+
+  let create capacity =
+    let queue, _ = Qe.create ~capacity Bigarray.char in
+    queue
+
+  let get t ~f =
+    match Qe.N.peek t with
+    | [] -> f Bigstringaf.empty ~off:0 ~len:0
+    | [ slice ] ->
+        assert (Bigstringaf.length slice = Qe.length t);
+        let n = f slice ~off:0 ~len:(Bigstringaf.length slice) in
+        Qe.N.shift_exn t n;
+        n
+    | _ :: _ ->
+        (* Should never happen because we compress on every `put`, and therefore
+         * the Queue never wraps around to the beginning. *)
+        assert false
+
+  let blit _src _off _dst _dst_off _len = ()
+  let linger t = Qe.length t
+
+  let put t ~f =
+    Qe.compress t;
+    let buffer = Qe.unsafe_bigarray t in
+    match f buffer ~off:(Qe.length t) ~len:(Qe.available t) with
+    | `Eof -> `Eof
+    | `Ok n as ret ->
+        (* Increment the offset, without making a copy *)
+        let (_ : ('a, 'b) Qe.N.bigarray list) =
+          Qe.N.push_exn t ~blit ~length:(fun _ -> n) buffer
+        in
+        ret
+end
+
+module IO_loop = struct
+  let start :
+      type t fd.
+      (module IO with type socket = fd) ->
+      (module Gluten.RUNTIME with type t = t) ->
+      t ->
+      read_buffer_size:int ->
+      fd ->
+      unit =
+   fun (module Io) (module Runtime) t ~read_buffer_size socket ->
+    let read_buffer = Buffer.create read_buffer_size in
+    let rec read_loop ?(linger = None) () =
+      match Runtime.next_read_operation t with
+      | `Read -> (
+          L.trace (fun m -> m "read_loop: read");
+          let res =
+            match linger with
+            | Some r ->
+                Fiber.yield ();
+                r
+            | None -> Buffer.put ~f:(Io.read socket) read_buffer
+          in
+          match res with
+          | `Eof ->
+              L.trace (fun m -> m "read_loop: read EOF");
+              let n =
+                Buffer.get read_buffer ~f:(fun bigstring ~off ~len ->
+                    Runtime.read_eof t bigstring ~off ~len)
+              in
+              L.trace (fun m -> m "read_loop: runtime read EOF %d" n);
+              let linger =
+                if n <> 0 && Buffer.linger read_buffer > 0 then Some `Eof
+                else None
+              in
+              read_loop ~linger ()
+          | `Ok n ->
+              L.trace (fun m -> m "read_loop: read %d" n);
+              let n2 =
+                Buffer.get read_buffer ~f:(fun bigstring ~off ~len ->
+                    L.trace (fun m -> m "read_loop: buffer get %d" len);
+                    Runtime.read t bigstring ~off ~len)
+              in
+              L.trace (fun m -> m "read_loop: runtime read %d" n2);
+              let l = Buffer.linger read_buffer in
+              let linger = if n2 <> 0 && l > 0 then Some (`Ok l) else None in
+              read_loop ~linger ())
+      | `Yield ->
+          let p, u = Promise.create () in
+          L.trace (fun m -> m "read_loop: yield");
+          Runtime.yield_reader t (Promise.resolve u);
+          Promise.await p;
+          read_loop ()
+      | `Close ->
+          L.trace (fun m -> m "read_loop: close");
+          Io.shutdown_receive socket
+    in
+    let rec write_loop () =
+      match Runtime.next_write_operation t with
+      | `Write io_vectors ->
+          L.trace (fun m -> m "write_loop: write");
+          Io.writev socket io_vectors |> Runtime.report_write_result t;
+          write_loop ()
+      | `Yield ->
+          let p, u = Promise.create () in
+          L.trace (fun m -> m "write_loop: yield");
+          Runtime.yield_writer t (Promise.resolve u);
+          Promise.await p;
+          write_loop ()
+      | `Close n ->
+          L.trace (fun m -> m "write_loop: close %d" n);
+          Io.shutdown_send socket
+    in
+    let run () =
+      Fiber.first
+        (fun () ->
+          try read_loop () with
+          | Eio.Cancel.Cancelled _ as e -> raise e
+          | exn ->
+              L.warn (fun m -> m "error reading: %a" Fmt.exn exn);
+              Runtime.report_exn t exn;
+              raise exn)
+        (fun () ->
+          try write_loop () with
+          | Eio.Cancel.Cancelled _ as e -> raise e
+          | exn ->
+              L.warn (fun m -> m "error writing: %a" Fmt.exn exn);
+              Runtime.report_exn t exn;
+              raise exn)
+    in
+    Fun.protect
+      ~finally:(fun () ->
+        L.trace (fun m -> m "io_loop: done");
+        Io.close socket)
+      run
+end
+
+module MakeClient (Io : IO) : Client with type socket = Io.socket = struct
+  module Client_connection = Gluten.Client
+
+  type socket = Io.socket
+  type t = { connection : Client_connection.t; socket : socket }
+
+  let create ~sw ~read_buffer_size ~protocol t socket =
+    let connection = Client_connection.create ~protocol t in
+    Fiber.fork ~sw (fun () ->
+        IO_loop.start
+          (module Io)
+          (module Client_connection)
+          connection ~read_buffer_size socket);
+    { connection; socket }
+
+  let upgrade t protocol =
+    Client_connection.upgrade_protocol t.connection protocol
+
+  let shutdown t =
+    L.trace (fun m -> m "shutting client down");
+    Client_connection.shutdown t.connection;
+    Io.close t.socket
+
+  let is_closed t = Client_connection.is_closed t.connection
+end
+
+module Eio_io :
+  IO with type socket = eio_socket and type addr = Eio.Net.Sockaddr.t = struct
+  type socket = eio_socket
+  type addr = Eio.Net.Sockaddr.t
+
+  let read socket bigstring ~off ~len =
+    L.trace (fun m -> m "reading up to %dB from eio socket" (len - off));
+    let buf = Cstruct.of_bigarray bigstring ~off ~len in
+    match Eio.Flow.read socket buf with
+    | got ->
+        L.trace (fun m -> m "read %dB" got);
+        `Ok got
+    | (exception End_of_file) | (exception Eio.Net.Connection_reset _) ->
+        L.trace (fun m -> m "EOF");
+        `Eof
+
+  let writev socket iovecs =
+    L.trace (fun m -> m "writting %d iovecs to eio socket" (List.length iovecs));
+    let source =
+      iovecs
+      |> List.map (fun { Faraday.buffer; off; len } ->
+             Cstruct.of_bigarray buffer ~off ~len)
+      |> Eio.Flow.cstruct_source
+    in
+    try
+      Eio.Flow.copy source socket;
+      let n =
+        iovecs |> List.fold_left (fun n { Faraday.len; _ } -> n + len) 0
+      in
+      L.trace (fun m -> m "wrote %dB to eio socket" n);
+      `Ok n
+    with Unix.Unix_error (Unix.EPIPE, _, _) -> `Closed
+
+  let shutdown socket cmd =
+    try Eio.Flow.shutdown socket cmd
+    with Unix.Unix_error (Unix.ENOTCONN, _, _) -> ()
+
+  let shutdown_send socket =
+    L.trace (fun m -> m "shutdown_send eio socket");
+    shutdown socket `Send
+
+  let shutdown_receive socket =
+    L.trace (fun m -> m "shutdown_receive eio socket");
+    shutdown socket `Receive
+
+  let close socket =
+    L.trace (fun m -> m "closing eio socket");
+    shutdown socket `All
+end
+
+module Client = MakeClient (Eio_io)

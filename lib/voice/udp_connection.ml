@@ -1,6 +1,4 @@
 open! Disco_core.Globals
-open Lwt.Infix
-
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 module Packet = struct
@@ -8,7 +6,6 @@ module Packet = struct
     open Angstrom
 
     let is_num = function '0' .. '9' -> true | _ -> false
-
     let is_null = function '\x00' -> true | _ -> false
 
     module Ip = struct
@@ -58,7 +55,6 @@ module Packet = struct
 
   module Keep_alive = struct
     let write ~ssrc f = Faraday.BE.write_uint32 f (Int32.of_int ssrc)
-
     let interval = 5.
   end
 
@@ -76,34 +72,32 @@ module Packet = struct
   end
 end
 
-let ip_discovery ?(retries = 3) ?(timeout = 1.) ~ssrc sock =
-  let open Lwt.Syntax in
+let ip_discovery ?(retries = 3) ?(timeout = 1.) ~ssrc ~addr sock =
   let buf = Bigstringaf.create 74 in
   let timeout () =
-    Lwt_unix.sleep timeout |> Lwt.map (fun _ -> Error `Timeout)
+    Eio_unix.sleep timeout;
+    Error `Timeout
   in
   let send_ip ~f ~ssrc sock =
     Packet.Ip.write ~ssrc f;
-    let b = Faraday.serialize_to_string f |> Bytes.unsafe_of_string in
-    let len = Bytes.length b in
-    Lwt_unix.send sock b 0 len [] >|= fun n -> assert (n = len)
+    let b = Faraday.serialize_to_bigstring f |> Cstruct.of_bigarray in
+    Eio.Net.send sock addr b
   in
-  let recv_ip ~buf sock =
-    let open Lwt.Syntax in
-    let b = Bigstringaf.to_string buf |> Bytes.unsafe_of_string in
-    let* _ = Lwt_unix.read sock b 0 74 in
-    Bigstringaf.blit_from_bytes b ~src_off:0 buf ~dst_off:0 ~len:74;
+  let recv_ip ~buf sock () =
+    let b = Cstruct.of_bigarray ~len:74 buf in
+    let _, n = Eio.Net.recv sock b in
+    assert (n = 74);
     let pkt = Packet.Ip.of_bigstring buf in
-    match pkt with Ok pkt -> Lwt.return pkt | Error msg -> failwith msg
+    match pkt with Ok _ as r -> r | Error msg -> failwith msg
   in
   let rec retry' n =
     let f = Faraday.of_bigstring buf in
-    let* () = send_ip ~f ~ssrc sock in
+    send_ip ~f ~ssrc sock;
     Faraday.close f;
     L.debug (fun m -> m "sent ip discovery request packet");
-    let* o = Lwt.pick [ timeout (); recv_ip ~buf sock |> Lwt_result.ok ] in
+    let o = Fiber.first timeout (recv_ip ~buf sock) in
     match o with
-    | Ok (_, ip, port) -> Lwt_result.return (ip, port)
+    | Ok (_, ip, port) -> Ok (ip, port)
     | Error `Timeout when n > 0 ->
         L.warn (fun m ->
             m
@@ -111,19 +105,17 @@ let ip_discovery ?(retries = 3) ?(timeout = 1.) ~ssrc sock =
                retrying..."
               (retries - n + 1));
         retry' (n - 1)
-    | Error `Timeout ->
-        Lwt_result.fail "timed out waiting for ip discovery response"
+    | Error `Timeout -> Error "timed out waiting for ip discovery response"
   in
   retry' retries
 
 type t = {
-  sock : Lwt_unix.file_descr;
-  local_addr : Unix.inet_addr * int;
-  discord_addr : Unix.inet_addr * int;
+  sw : Switch.t;
+  sock : Eio.Net.datagram_socket;
+  local_addr : Eio.Net.Sockaddr.datagram;
+  discord_addr : Eio.Net.Sockaddr.datagram;
   ssrc : int;
-  f : Faraday.t;
-  flush_packet : unit -> unit Lwt.t;
-  send_tx : [ `Flush | `Keep_alive ] Lwt_pipe.Writer.t;
+  send : (Faraday.t -> unit) -> unit;
 }
 
 type encryption_mode = Normal | Suffix | Lite of uint32 ref
@@ -143,133 +135,126 @@ let encrypt ~nonce ~secret data =
   Sodium.Secret_box.Bigbytes.secret_box secret data nonce
 
 let send_voice_packet ~crypt ~ts ~seq ~audio t =
-  let f = t.f in
+  t.send @@ fun f ->
   Packet.RTP.write_header ~seq ~ts ~ssrc:t.ssrc f;
   let encrypt nonce = encrypt audio ~nonce ~secret:crypt.secret in
-  let () =
-    match crypt.mode with
-    | Normal ->
-        let nonce = Faraday.create 24 in
-        Packet.RTP.write_header ~seq ~ts ~ssrc:t.ssrc nonce;
-        let padding =
-          String.make
-            (Sodium.Secret_box.nonce_size - Faraday.pending_bytes nonce)
-            '\x00'
-        in
-        Faraday.write_string nonce padding;
-        nonce |> Faraday.serialize_to_bigstring |> encrypt
-        |> Faraday.schedule_bigstring f
-    | Suffix ->
-        let nonce = Sodium.Secret_box.(random_nonce () |> Bigbytes.of_nonce) in
-        Faraday.schedule_bigstring f (encrypt nonce);
-        Faraday.schedule_bigstring f nonce
-    | Lite n ->
-        let nonce = Bigstringaf.create Sodium.Secret_box.nonce_size in
-        Bigstringaf.unsafe_set_int32_be nonce 0 (Uint32.to_int32 !n);
-        let _padding =
-          Seq.(
-            4 --^ Bigstringaf.length nonce
-            |> iter (fun i -> nonce.{i} <- '\x00'))
-        in
-        let next =
-          if Uint32.(compare !n max_int) = 0 then Uint32.zero
-          else Uint32.(!n + one)
-        in
-        n := next;
-        Faraday.schedule_bigstring f (encrypt nonce);
-        Faraday.schedule_bigstring f nonce
-  in
-  t.flush_packet ()
+  match crypt.mode with
+  | Normal ->
+      let nonce = Faraday.create 24 in
+      Packet.RTP.write_header ~seq ~ts ~ssrc:t.ssrc nonce;
+      let padding =
+        String.make
+          (Sodium.Secret_box.nonce_size - Faraday.pending_bytes nonce)
+          '\x00'
+      in
+      Faraday.write_string nonce padding;
+      nonce |> Faraday.serialize_to_bigstring |> encrypt
+      |> Faraday.schedule_bigstring f
+  | Suffix ->
+      let nonce = Sodium.Secret_box.(random_nonce () |> Bigbytes.of_nonce) in
+      Faraday.schedule_bigstring f (encrypt nonce);
+      Faraday.schedule_bigstring f nonce
+  | Lite n ->
+      let nonce = Bigstringaf.create Sodium.Secret_box.nonce_size in
+      Bigstringaf.unsafe_set_int32_be nonce 0 (Uint32.to_int32 !n);
+      let _padding =
+        Seq.(
+          4 --^ Bigstringaf.length nonce |> iter (fun i -> nonce.{i} <- '\x00'))
+      in
+      let next =
+        if Uint32.(compare !n max_int) = 0 then Uint32.zero
+        else Uint32.(!n + one)
+      in
+      n := next;
+      Faraday.schedule_bigstring f (encrypt nonce);
+      Faraday.schedule_bigstring f nonce
 
-let create ~ssrc (ip, port) =
-  let open Lwt.Syntax in
-  let sock =
-    Lwt_unix.socket Unix.PF_INET Unix.SOCK_DGRAM
-      (Unix.getprotobyname "udp").Unix.p_proto
-  in
-  let* () = Lwt_unix.bind sock Unix.(ADDR_INET (inet_addr_any, 0)) in
-  let addr = Unix.inet_addr_of_string ip in
-  let* () = Lwt_unix.connect sock Unix.(ADDR_INET (addr, port)) in
-  let discord_addr = (addr, port) in
-  L.info (fun m ->
-      m "discovering external ip using discord's voice server: %s:%d" ip port);
-  let* ip_d, port_d =
-    ip_discovery ~ssrc sock
-    |> Lwt.map (function Ok d -> d | Error msg -> failwith msg)
-  in
-  L.info (fun m -> m "discovered ip and port: %s:%d" ip_d port_d);
-  let local_addr = Unix.(inet_addr_of_string ip_d, port_d) in
-  let f = Faraday.create (1024 * 4) in
-  let writev = Faraday_lwt_unix.writev_of_fd sock in
-  let send_tx = Lwt_pipe.create () in
-  let t =
-    {
-      f;
-      sock;
-      local_addr;
-      discord_addr;
-      ssrc;
-      flush_packet = (fun () -> Lwt_pipe.write send_tx `Flush >|= ignore);
-      send_tx;
-    }
-  in
-  let yield =
-    let keep_alive =
-      Lwt_stream.from (fun () ->
-          Lwt_unix.sleep Packet.Keep_alive.interval >|= fun () ->
-          Some `Keep_alive)
-      |> Lwt_pipe.of_stream
+let create ~sw ~net ~ssrc (ip, port) =
+  let p, u = Promise.create () in
+  let run () : no_return =
+    Switch.run @@ fun sw ->
+    let discord_addr = `Udp (Eio.Net.Ipaddr.of_raw ip, port) in
+    let sock = Eio.Net.datagram_socket ~sw net discord_addr in
+    L.info (fun m ->
+        m "discovering external ip using discord's voice server: %s:%d" ip port);
+    let ip_d, port_d =
+      ip_discovery ~ssrc ~addr:discord_addr sock |> Result.get_exn
     in
-    Lwt_pipe.connect ~ownership:`OutOwnsIn keep_alive send_tx;
-    fun f ->
-      Lwt_pipe.read send_tx >|= function
-      | Some `Keep_alive ->
-          L.debug (fun m ->
-              m "sending UDP keepalive packet"
-                ~fields:
-                  Relog.Field.
-                    [
-                      int "ssrc" ssrc;
-                      float "interval" Packet.Keep_alive.interval;
-                    ]);
-          Packet.Keep_alive.write ~ssrc f
-      | Some `Flush -> ()
-      | None ->
-          L.debug (fun m -> m "closing udp socket");
-          Faraday.close f
-  in
-  let write_worker = Faraday_lwt_unix.serialize f ~yield ~writev in
-  let read_worker =
-    let open Lwt.Infix in
-    let b = Bytes.create (1024 * 4) in
-    let b_len = Bytes.length b in
-    let rec f () =
-      if Lwt_pipe.is_closed send_tx then Lwt.return_unit
-      else
-        let r = Lwt_unix.read sock b 0 b_len >|= fun n -> `read n in
-        let t = Lwt_unix.sleep (1. /. 5.) >|= fun () -> `timeout in
-        Lwt.pick [ r; t ] >>= function
-        | `read _n ->
-            (* L.trace (fun m ->
-                m "got %d bytes from UDP (ssrc=%d) (rtcp? keepalive ack?)" n
-                  ssrc); *)
-            f ()
-        | `timeout -> f ()
+    L.info (fun m -> m "discovered ip and port: %s:%d" ip_d port_d);
+    let local_addr = `Udp (Eio.Net.Ipaddr.of_raw ip_d, port_d) in
+    let sync = Eio.Stream.create 0 in
+    let send = Eio.Stream.add sync in
+    let t = { sw; sock; local_addr; discord_addr; ssrc; send } in
+    let write_worker () =
+      let f = Faraday.create (1024 * 4) in
+      let shutdown () =
+        if not @@ Faraday.is_closed f then (
+          Faraday.close f;
+          Faraday.drain f |> ignore)
+      in
+      let writev = function
+        | [] -> assert false
+        | [ Faraday.{ buffer; off; len } ] ->
+            let buf = Cstruct.of_bigarray ~off ~len buffer in
+            Eio.Net.send sock discord_addr buf;
+            len
+        | vecs ->
+            let len =
+              List.fold_left (fun n Faraday.{ len; _ } -> n + len) 0 vecs
+            in
+            let buf = Cstruct.create_unsafe len in
+            List.fold_left (fun dstoff Faraday.{ buffer; len; off } ->
+                Cstruct.blit buffer off buf dstoff len;
+                dstoff + len)
+            |> ignore;
+            Eio.Net.send sock discord_addr buf;
+            len
+      in
+      let rec loop () =
+        match Faraday.operation f with
+        | `Writev iovecs ->
+            let n = writev iovecs in
+            Faraday.shift f n;
+            loop ()
+        | `Yield ->
+            let fn = Eio.Stream.take sync in
+            fn f;
+            loop ()
+        | `Close -> ()
+      in
+      Switch.on_release sw shutdown;
+      Fun.protect ~finally:shutdown loop
     in
-    f ()
+    let read_worker () =
+      let buf = Cstruct.create (1024 * 4) in
+      while true do
+        let _addr, n = Eio.Net.recv sock buf in
+        L.trace (fun m ->
+            m "got %d bytes from UDP (ssrc=%d) (rtcp? keepalive ack?)" n ssrc)
+      done
+    in
+    let keep_alive () =
+      while true do
+        send (fun f ->
+            L.debug (fun m ->
+                m "sending UDP keepalive packet"
+                  ~fields:
+                    Relog.Field.
+                      [
+                        int "ssrc" ssrc;
+                        float "interval" Packet.Keep_alive.interval;
+                      ]);
+            Packet.Keep_alive.write ~ssrc f);
+        Eio_unix.sleep Packet.Keep_alive.interval
+      done
+    in
+    Promise.resolve u t;
+    Fiber.any [ write_worker; read_worker; keep_alive ];
+    raise Exit
   in
-  Lwt_pipe.keep send_tx write_worker;
-  Lwt_pipe.keep send_tx read_worker;
-  let+ () = Lwt_pipe.write_exn send_tx `Keep_alive in
-  t
+  Fiber.fork ~sw (fun () -> match run () with _ -> . | exception Exit -> ());
+  Promise.await p
 
-let destroy { sock; send_tx; _ } =
-  match Lwt_unix.state sock with
-  | Lwt_unix.Opened ->
-      L.debug (fun m -> m "closing udp serializer");
-      Lwt_pipe.close_nonblock send_tx
-  | Closed | Aborted _ -> ()
-
+let destroy { sw; _ } = Switch.fail sw Exit
 let local_addr { local_addr; _ } = local_addr
-
 let server_addr { discord_addr; _ } = discord_addr

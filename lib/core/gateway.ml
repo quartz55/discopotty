@@ -1,72 +1,117 @@
 open! Globals
-open Lwt.Infix
-
 module L = (val Relog.logger ~namespace:__MODULE__ ())
-
 module Payload = Gateway_payload
+module Token_bucket = Lf_token_bucket
+
+module Subs = struct
+  type t = { mtx : Eio_mutex.t; mutable st : state }
+
+  and state =
+    | Waiting of (unit Promise.t * unit Promise.u)
+    | Serving of sub list
+
+  and sub = Events.t -> unit
+
+  let make () = { mtx = Eio_mutex.make (); st = Waiting (Promise.create ()) }
+
+  let sub ~fn t =
+    Eio_mutex.with_ t.mtx @@ fun () ->
+    match t.st with
+    | Waiting (_, u) ->
+        t.st <- Serving [ fn ];
+        Promise.resolve u ()
+    | Serving s -> t.st <- Serving (fn :: s)
+
+  let rec pub ~sw t v =
+    Eio_mutex.lock t.mtx;
+    match t.st with
+    | Waiting (p, _) ->
+        Eio_mutex.unlock t.mtx;
+        Promise.await p;
+        pub ~sw t v
+    | Serving s ->
+        List.iter (fun fn -> Fiber.fork ~sw (fun () -> fn v)) s;
+        Eio_mutex.unlock t.mtx
+end
 
 type t = {
   mutable user : Models.User.t;
   shards : shard list;
-  id_bucket : Token_bucket.t;
-  ev_rx : Events.t Lwt_pipe.Reader.t;
-  ev_snk : Events.t Mpmc.Sink.t;
+  subs : Subs.t;
+  dead : unit Promise.t * unit Promise.u;
 }
 
-and shard = Lwt_mutex.t * Session.t
+and shard = Eio_mutex.t * Session.t
+
+let check { dead; _ } =
+  if Promise.is_resolved (fst dead) then
+    raise @@ Invalid_argument "dead gateway"
 
 let disconnect t =
-  List.map
-    (fun (mtx, sess) ->
-      Lwt_mutex.with_lock mtx (fun () -> Session.disconnect sess))
-    t.shards
-  |> Lwt.join
-  >>= fun () -> Lwt_pipe.close t.ev_rx
+  if not @@ Promise.is_resolved (fst t.dead) then
+    Promise.resolve (snd t.dead) ()
 
-let connect ?(max_concurrency = 1) ~token url =
-  let open Lwt_result.Syntax in
-  (* docs: identify requests allowed per 5 seconds *)
-  let rate = 1. /. (float max_concurrency /. 5.) in
-  let id_bucket = Token_bucket.make ~capacity:max_concurrency rate in
-  let+ main = Session.create ~id_bucket token (Uri.of_string url) in
-  let user = Session.user main in
-  let shards = [ main ] in
-  let ev_rx = List.map Session.events shards |> Lwt_pipe.Reader.merge_all in
-  let src, snk = Mpmc.make () in
-  let rec fwd () =
-    Lwt_pipe.read ev_rx >>= function
-    | Some v -> Mpmc.Source.write src v >>= fwd
-    | None -> Mpmc.Source.close src
+let connect ~sw ~net ~dmgr:_ ?(max_concurrency = 1) ~token url =
+  assert (max_concurrency > 0);
+  let p, u = Promise.create () in
+  let spawn () : no_return =
+    Switch.run @@ fun sw ->
+    (* docs: identify requests allowed per 5 seconds *)
+    let rate = 1. /. (float max_concurrency /. 5.) in
+    let id_bucket = Token_bucket.make ~capacity:max_concurrency rate in
+    let subs = Subs.make () in
+    let fwd = Subs.pub ~sw subs in
+    let main =
+      Session.create ~sw ~net ~id_bucket ~fwd token (Uri.of_string url)
+    in
+    let user = Session.user main in
+    (* TODO @quartz55: multiple shards using domains *)
+    (* TODO @quartz55: max_concurrency "bucket" handling *)
+    let shards = [ main ] in
+    let t =
+      {
+        user;
+        subs;
+        shards = List.map (fun s -> (Eio_mutex.make (), s)) shards;
+        dead = Promise.create ();
+      }
+    in
+    Promise.resolve u t;
+    Promise.await (fst t.dead);
+    t.shards
+    |> List.map (fun (mtx, sess) () ->
+           Eio_mutex.with_ mtx @@ fun () -> Session.disconnect sess)
+    |> Fiber.all;
+    raise Exit
   in
-  Lwt.async fwd;
-  {
-    user;
-    shards = List.map (fun s -> (Lwt_mutex.create (), s)) shards;
-    id_bucket;
-    ev_rx;
-    ev_snk = snk;
-  }
+  Fiber.fork ~sw (fun () -> match spawn () with _ -> . | exception Exit -> ());
+  Promise.await p
 
 let user { user; _ } = user
-
 let shards { shards; _ } = shards
+
+let subscribe ~fn t =
+  check t;
+  Subs.sub ~fn t.subs
+
+let sub = subscribe
 
 let shard ~guild_id ~f { shards; _ } =
   let len = List.length shards in
   let id = Int64.(guild_id lsr 22 |> to_int) mod len in
   let mtx, sess = List.get_at_idx_exn id shards in
-  Lwt_mutex.with_lock mtx (fun () -> f sess)
+  Eio_mutex.with_ mtx @@ fun () -> f sess
 
 let main_shard { shards; _ } = List.hd shards
 
-let events { ev_snk; _ } = ev_snk
-
 let send_presence_update t ?since ~afk status =
+  check t;
   let mtx, shard = main_shard t in
-  Lwt_mutex.with_lock mtx (fun () ->
-      Session.send_presence_update shard ?since ~afk status)
+  Eio_mutex.with_ mtx @@ fun () ->
+  Session.send_presence_update shard ?since ~afk status
 
 let send_voice_state_update t ?channel_id ?self_mute ?self_deaf guild_id =
+  check t;
   let f shard =
     Session.send_voice_state_update shard ?channel_id ?self_mute ?self_deaf
       guild_id
@@ -74,6 +119,7 @@ let send_voice_state_update t ?channel_id ?self_mute ?self_deaf guild_id =
   shard ~guild_id ~f t
 
 let send_guild_request_members t ?presences ?nonce ~q guild_id =
+  check t;
   let f shard =
     Session.send_guild_request_members shard ?presences ?nonce ~q guild_id
   in

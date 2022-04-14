@@ -1,18 +1,14 @@
 open! Globals
-open Lwt.Infix
-
 module L = (val Relog.logger ~namespace:__MODULE__ ())
-
 module F = Relog.Field
-module Ws_client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client)
-module Wss_client = Websocketaf_lwt.Client (Gluten_lwt_unix.Client.SSL)
+module Ws_client = Websocketaf_eio.Client (Gluten_eio.Client)
 module Ws_payload = Websocketaf.Payload
+open Eio.Std
 
 module Close_code = struct
   include Websocketaf.Websocket.Close_code
 
   let is_standard = function #standard -> true | _ -> false
-
   let is_std = is_standard
 
   let pp =
@@ -35,69 +31,38 @@ module Close_code = struct
     fun fmt t -> Format.fprintf fmt "(%d %a)" (to_int t) pp' t
 end
 
-let () = Ssl.init ()
-
 let max_payload_len = 4096
 
-let connect_ssl host fd =
-  L.info (fun m -> m "initializing SSL context");
-  let ctx = Ssl.create_context Ssl.TLSv1_2 Ssl.Client_context in
-  let s = Lwt_ssl.embed_uninitialized_socket fd ctx in
-  let ssl_sock = Lwt_ssl.ssl_socket_of_uninitialized_socket s in
-  Ssl.set_client_SNI_hostname ssl_sock host;
-  Ssl.set_hostflags ssl_sock [ No_partial_wildcards ];
-  Ssl.set_host ssl_sock host;
-  L.info (fun m -> m "performing SSL handshake for socket");
-  let open Lwt.Syntax in
-  let+ socket_or_error =
-    Lwt.catch
-      (fun () -> Lwt_result.ok (Lwt_ssl.ssl_perform_handshake s))
-      (function
-        | Ssl.Connection_error _ssl_error ->
-            let msg = Ssl.get_error_string () in
-            L.err (fun m -> m "error performing SSL handshake: %s" msg);
-            Lwt.return (Error.msg msg)
-        | _ -> assert false)
+let connect_tls ~sw host flow =
+  L.trace (fun m -> m "configuring TLS client");
+  let null ?ip:_ ~host:_ _certs = Ok None in
+  let host = Domain_name.host_exn @@ Domain_name.of_string_exn host in
+  let cfg =
+    Tls.Config.client ~authenticator:null ~version:(`TLS_1_2, `TLS_1_3) ()
   in
-  match socket_or_error with
-  | Ok ssl_socket ->
-      let _ssl_version = Ssl.version ssl_sock in
-      let ssl_cipher = Ssl.get_cipher ssl_sock in
-      L.info (fun m ->
-          m "SSL connection using TLS1.2 / %s" (Ssl.get_cipher_name ssl_cipher));
-      Ok ssl_socket
-  | Error e ->
-      let verify_result = Ssl.get_verify_result ssl_sock in
-      if verify_result <> 0 then
-        L.err (fun m -> m "verify_result=%d" verify_result);
-      Error e
+  L.trace (fun m -> m "performing TLS handshake for socket");
+  let out = Tls_eio.client_of_flow ~sw cfg ~host flow in
+  (out :> eio_socket)
 
-let open_socket ?(ssl = false) ?(port = if ssl then 443 else 80) host =
-  let open Lwt_result.Syntax in
-  let* addresses =
-    Lwt_unix.getaddrinfo host (Int.to_string port) [ Unix.(AI_FAMILY PF_INET) ]
-    |> Lwt_result.catch
-    |> Lwt_result.map_err (fun e -> `Exn e)
+let open_socket ~sw ~net ?(tls = false) ?(port = if tls then 443 else 80) host =
+  let rec inner = function
+    | addr :: xs -> ( try Eio.Net.connect ~sw net addr with _ -> inner xs)
+    | [] ->
+        raise
+        @@ Invalid_argument
+             (Format.sprintf "couldn't connect socket to %s:%d" host port)
   in
-
-  let fd = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-  L.info (fun m -> m "connecting socket");
-  let* () =
-    let rec inner = function
-      | addr :: xs ->
-          Lwt.try_bind
-            (fun () -> Lwt_unix.connect fd addr.Unix.ai_addr)
-            (fun () -> Lwt_result.return ())
-            (fun _exn -> inner xs)
-      | [] ->
-          Lwt.return (Error.msgf "couldn't connect socket to %s:%d" host port)
-    in
-    inner addresses
+  let addrs =
+    Unix.getaddrinfo host (Int.to_string port) [ Unix.(AI_FAMILY PF_INET) ]
+    |> List.map (fun addr ->
+           match addr.Unix.ai_addr with
+           | Unix.ADDR_INET (inetaddr, port) ->
+               `Tcp (Eio_unix.Ipaddr.of_unix inetaddr, port)
+           | ADDR_UNIX name -> `Unix name)
   in
-  let+ socket =
-    if ssl then connect_ssl host fd else Lwt_ssl.plain fd |> Lwt_result.return
-  in
-  socket
+  L.trace (fun m -> m "connecting socket");
+  let flow = inner addrs in
+  if tls then connect_tls ~sw host flow else flow
 
 let gen_nonce =
   let alphanum =
@@ -113,47 +78,45 @@ let gen_nonce =
     str |> Bytes.unsafe_to_string
 
 let _uri_info uri =
-  let ssl =
+  let tls =
     match Uri.scheme uri with
     | Some "ws" | Some "http" -> false
     | Some "wss" | Some "https" | None -> true
     | Some scheme -> failwith ("unsupported websocket scheme: " ^ scheme)
   in
   let host = Uri.host uri |> Option.get_exn in
-  let port = Uri.port uri |> Option.get_or ~default:(if ssl then 443 else 80) in
+  let port = Uri.port uri |> Option.get_or ~default:(if tls then 443 else 80) in
   let resource = Uri.path_and_query uri in
-  (host, port, ssl, resource)
+  (host, port, tls, resource)
 
 type enc = [ `json ]
 
 module type Connection = sig
   type conn_info = {
     addr : string * int;
-    socket : Lwt_ssl.socket;
+    socket : eio_socket;
     enc : [ `json ];
     zlib : bool;
   }
 
   type send
-
   type recv
 
   type t
-
   and frame = Close of Close_code.t | Payload of recv
 
   val info : t -> conn_info
-
-  val stream : t -> frame Lwt_stream.t
-
   val is_closed : t -> bool
-
+  val read : t -> frame option
   val send : t -> send -> unit
-
   val close : ?code:Close_code.t -> t -> unit
 
-  val create : ?zlib:bool -> ?enc:enc -> Uri.t -> (t, Error.t) Lwt_result.t
+  val create :
+    sw:Switch.t -> net:Eio.Net.t -> ?zlib:bool -> ?enc:enc -> Uri.t -> t
 end
+
+exception Handshake_failure of string * Httpaf.Response.t
+exception Http_failure of string
 
 module Make : functor (P : Payload.Intf) ->
   Connection with type send := P.send and type recv := P.recv =
@@ -163,28 +126,29 @@ functor
   struct
     type conn_info = {
       addr : string * int;
-      socket : Lwt_ssl.socket;
+      socket : eio_socket;
       enc : [ `json ];
       zlib : bool;
     }
 
     type send = P.send
-
     type recv = P.recv
 
     type t = {
       info : conn_info;
       wsd : Websocketaf.Wsd.t;
-      stream : frame Lwt_stream.t * (unit -> unit);
+      stream : frame Eio.Stream.t;
     }
 
     and frame = Close of Close_code.t | Payload of recv
 
     let info { info; _ } = info
-
-    let stream { stream; _ } = fst stream
-
     let is_closed { wsd; _ } = Websocketaf.Wsd.is_closed wsd
+
+    let read t =
+      match is_closed t with
+      | true -> Eio.Stream.take_nonblocking t.stream
+      | false -> Some (Eio.Stream.take t.stream)
 
     let send t (pl : send) =
       L.debug (fun m ->
@@ -204,22 +168,14 @@ functor
       send' 0
 
     let close ?code t =
-      if Websocketaf.Wsd.is_closed t.wsd then ()
-      else
-        let close_stream = snd t.stream in
-        close_stream ();
-        Websocketaf.Wsd.close ?code t.wsd
+      if not @@ is_closed t then Websocketaf.Wsd.close ?code t.wsd
 
-    let rec _connect ~enc ~zlib ~ssl host port resource =
-      let open Lwt_result.Syntax in
-      L.info (fun m -> m "opening socket (%s:%d) ssl=%b" host port ssl);
-      let* socket = open_socket ~ssl ~port host in
+    let rec _connect ~sw ~net ~enc ~zlib ~tls host port resource =
+      L.info (fun m -> m "opening socket (%s:%d) tls=%b" host port tls);
+      let socket = open_socket ~sw ~net ~tls ~port host in
       let conn_info = { addr = (host, port); socket; enc; zlib } in
 
-      L.info (fun m -> m "initiating websocket handshake");
-      let nonce = gen_nonce 20 in
-
-      let p, u = Lwt.wait () in
+      let p, u = Promise.create () in
       let error_handler = function
         | `Handshake_failure (rsp, _)
           when Httpaf.(Status.is_redirection rsp.Response.status) ->
@@ -229,22 +185,28 @@ functor
             L.warn (fun m ->
                 m "got redirection to '%s' during websocket handshake" loc
                   ~fields:Relog.Field.[ str "location" loc ]);
-            Lwt.wakeup_later u (Error (`Redir loc))
+            Promise.resolve_ok u (`Redir loc)
         | `Handshake_failure (rsp, _body) ->
             L.err (fun m ->
                 m "error during websocket handshake:@.%a" Httpaf.Response.pp_hum
                   rsp);
-            Lwt.wakeup_later u
-              (Error.msgf "failed to handshake websocket: %s" rsp.reason)
-        | _ -> assert false
+            let emsg =
+              Format.sprintf "failed to handshake websocket: %s" rsp.reason
+            in
+            Promise.resolve_error u @@ Handshake_failure (emsg, rsp)
+        | `Malformed_response msg -> Promise.resolve_error u @@ Http_failure msg
+        | `Invalid_response_body_length _res ->
+            Promise.resolve_error u
+            @@ Http_failure "invalid response body length"
+        | `Exn exn -> Promise.resolve_error u @@ exn
       in
       let websocket_handler wsd =
-        let stream, push = Lwt_stream.create () in
-        let close_stream () =
-          if not @@ Lwt_stream.is_closed stream then push None
-        in
-        Lwt.wakeup_later u
-          (Ok { info = conn_info; wsd; stream = (stream, close_stream) });
+        (* TODO @quartz55: does this effectively back-pressure
+           or will it just be catastrophic?
+           maybe an unbounded stream would make more sense
+           given ws/af is push-based *)
+        let stream = Eio.Stream.create max_int in
+        Promise.resolve_ok u (`Conn { info = conn_info; wsd; stream });
         let do_read ~on_done payload =
           let buf = Faraday.create 1024 in
           let on_eof () =
@@ -258,6 +220,7 @@ functor
           Ws_payload.schedule_read payload ~on_read ~on_eof
         in
         let frame ~opcode ~is_fin ~len payload =
+          Fiber.fork ~sw @@ fun () ->
           L.debug (fun m ->
               m "frame"
                 ~fields:
@@ -268,13 +231,9 @@ functor
                       int "len" len;
                     ]);
           match opcode with
-          | _ when Lwt_stream.is_closed stream ->
-              L.debug (fun m ->
-                  m "consumer stream is closed, ignoring frame...")
           | `Connection_close when len < 2 ->
               L.warn (fun m -> m "no close code in frame, defaulting to 1000");
-              push (Some (Close `Going_away));
-              close_stream ();
+              Eio.Stream.add stream (Close `Going_away);
               Websocketaf.Wsd.close wsd
           | `Connection_close ->
               let on_done frame =
@@ -283,8 +242,7 @@ functor
                 in
                 L.warn (fun m ->
                     m "got close frame with code=%a" Close_code.pp close_code);
-                push (Some (Close close_code));
-                close_stream ();
+                Eio.Stream.add stream (Close close_code);
                 Websocketaf.Wsd.close wsd
               in
               do_read payload ~on_done
@@ -309,7 +267,7 @@ functor
                     L.warn (fun m ->
                         m "couldn't parse payload, ignoring..."
                           ~fields:F.[ str "exn" (Printexc.to_string exn) ])
-                | pl -> push (Some (Payload pl))
+                | pl -> Eio.Stream.add stream (Payload pl)
               in
               do_read payload ~on_done
           | `Continuation ->
@@ -322,30 +280,28 @@ functor
         in
         let eof () =
           L.err (fun m -> m "!!!FATAL!!! websocket received EOF");
-          exit (-1)
+          raise @@ Sys_error "websocket received EOF"
         in
         { Websocketaf.Client_connection.frame; eof }
       in
-      let do_handshake =
-        if ssl then
-          Wss_client.connect socket ~nonce ~host ~port ~resource ~error_handler
-            ~websocket_handler
-          >|= ignore
-        else
-          Ws_client.connect (Lwt_ssl.get_fd socket) ~nonce ~host ~port ~resource
-            ~error_handler ~websocket_handler
-          >|= ignore
+      L.info (fun m -> m "initiating websocket handshake");
+      let nonce = gen_nonce 20 in
+      let conn =
+        Ws_client.connect ~sw socket ~nonce ~host ~port ~resource ~error_handler
+          ~websocket_handler
       in
-      let* _ = do_handshake |> Error.catch_lwt in
-      p >>= function
-      | Error (`Redir loc) ->
-          let host, port, ssl, resource = _uri_info (Uri.of_string loc) in
-          _connect ~enc ~zlib ~ssl host port resource
-      | Error #Error.t as err -> Lwt.return err
-      | Ok t -> Lwt.return (Ok t)
+      match Promise.await_exn p with
+      | `Conn t ->
+          Switch.on_release sw (fun () -> Ws_client.shutdown conn);
+          t
+      | `Redir loc ->
+          let host, port, tls, resource = _uri_info (Uri.of_string loc) in
+          _connect ~sw ~net ~enc ~zlib ~tls host port resource
 
-    let create ?(zlib = false) ?(enc = `json) uri =
+    let create ~sw ~net ?(zlib = false) ?(enc = `json) uri =
       L.info (fun m -> m "connecting to gateway at '%a'" Uri.pp uri);
-      let host, port, ssl, resource = _uri_info uri in
-      _connect ~enc ~zlib ~ssl host port resource
+      let host, port, tls, resource = _uri_info uri in
+      let t = _connect ~sw ~net ~enc ~zlib ~tls host port resource in
+      Switch.on_release sw (fun () -> close t);
+      t
   end

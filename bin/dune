@@ -1,7 +1,14 @@
 (executable
- (name notebook)
- (public_name notebook.bc)
+ (name lf_tb)
+ (public_name lf_tb.bc)
  (modes byte)
- (modules notebook)
+ (modules lf_tb)
  (package discopotty)
- (libraries disco disco.utils containers eio eio_luv))
+ (libraries disco.utils containers eio eio_luv eio.unix))
+
+(executable
+ (name eio_notebook)
+ (public_name eio_notebook.exe)
+ (modules eio_notebook)
+ (package discopotty)
+ (libraries disco.utils bigstringaf containers eio eio_luv eio.unix))

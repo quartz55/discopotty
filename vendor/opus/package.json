@@ -18,7 +18,7 @@
     "ocaml": "~4.12.0"
   },
   "devDependencies": {
-    "@opam/merlin": "*",
+    "@opam/merlin": "4.4-412",
     "@opam/ocaml-lsp-server": "*",
     "@opam/ocamlformat": "*",
     "@opam/odoc": "*"
