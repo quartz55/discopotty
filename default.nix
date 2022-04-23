@@ -1,12 +1,17 @@
-{
-  ocamlPackages
+{ lib
+, ocamlPackages
 }:
 
 with ocamlPackages;
 buildDunePackage {
   pname = "disco";
   version = "0.0.1";
-  src = ./.;
+
+  src = lib.filterGitSource {
+    src = ./.;
+    dirs = [ "lib" "tests" ];
+    files = [ "dune" "dune-project" "disco.opam" ];
+  };
 
   propagatedBuildInputs = [
     disco-opus

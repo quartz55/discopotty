@@ -110,7 +110,7 @@ let manage ~net ~dmgr t =
         in
         cas ~ev st (Init { cid; req; info = Empty }) @@ fun () ->
         (* TODO timeout *)
-        L.info (fun m -> m "join request while detached");
+        L.dbg (fun m -> m "join request while detached");
         Gateway.send_voice_state_update t.gw ~channel_id:cid ~self_mute:t.muted
           ~self_deaf:t.deafened t.guild_id;
         main_thread ()
@@ -155,7 +155,7 @@ let manage ~net ~dmgr t =
         req @@ Ok ()
     | (Live sess as st), Req_join _ ->
         cas ~ev st (Detached stub) @@ fun () ->
-        L.info (fun m -> m "join request while live, switching channels");
+        L.dbg (fun m -> m "join request while live, switching channels");
         Session.disconnect sess;
         handle ev
     | (Live sess as st), Gw_sess nsess
@@ -165,12 +165,12 @@ let manage ~net ~dmgr t =
         cas ~ev st
           (Init { req = stub; cid = nsess.channel_id; info = Got_srv srv })
         @@ fun () ->
-        L.warn (fun m -> m "new voice session info, reconnecting");
+        L.dbg (fun m -> m "new voice session info, reconnecting");
         Session.disconnect sess;
         handle ev
     | (Live sess as st), Gw_dc ->
         cas ~ev st (Detached stub) @@ fun () ->
-        L.info (fun m -> m "disconnected");
+        L.dbg (fun m -> m "disconnected");
         Session.disconnect sess;
         main_thread ()
     | Live _, (Gw_sess _ | Gw_srv _) -> main_thread ()
@@ -211,6 +211,5 @@ let join ~channel_id t =
   Promise.await_exn p
 
 let leave t =
-  Eio.Stream.add t.evs Gw_dc;
   Gateway.send_voice_state_update t.gw ~self_mute:t.muted ~self_deaf:t.deafened
     t.guild_id

@@ -13,7 +13,6 @@ stdenv.mkDerivation {
   nativeBuildInputs = [
     ocamlPackages.dune
     ocaml
-    # findlib
   ];
   buildInputs = with ocamlPackages; [
     disco

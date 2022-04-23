@@ -16,20 +16,15 @@ in
 (pkgs.mkShell {
   OCAMLRUNPARAM = "b";
   inputsFrom = lib.attrValues discoDrvs;
-  # inputsFrom = [ self.packages.${stdenv.system}.discopotty ];
   buildInputs = with pkgs; [
-    ocaml
     ocamlPackages.ocaml-lsp
-    ocamlPackages.dune
-
     ocamlformat
     ocamlPackages.merlin
     ocamlPackages.utop
     ffmpeg
     youtube-dl
   ];
+}).overrideAttrs (o: {
+  propagatedBuildInputs = filterDrvs o.propagatedBuildInputs;
+  buildInputs = filterDrvs o.buildInputs;
 })
-# .overrideAttrs (o: {
-#   propagatedBuildInputs = filterDrvs o.propagatedBuildInputs;
-#   buildInputs = filterDrvs o.buildInputs;
-# })

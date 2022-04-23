@@ -1,7 +1,6 @@
-{ 
-  ocamlPackages
-  , pkg-config
-  , libopus
+{ ocamlPackages
+, pkg-config
+, libopus
 }:
 
 with ocamlPackages;

@@ -51,7 +51,7 @@
                     url = "https://github.com/kit-ty-kate/ocaml-stdint/archive/${rev}.tar.gz";
                     sha256 = sha256:0ib82j20zjq5111rwhl2281lbccbsi2cqibvbqcanim5ffd008l1;
                   };
-                  patches = [];
+                  patches = [ ];
                 });
                 eio = super.ocamlPackages.buildDunePackage {
                   pname = "eio";
@@ -91,13 +91,16 @@
                     result
                   ];
                 };
-                ctypes-foreign = super.ocamlPackages.buildDunePackage {
-                  pname = "${self.ocamlPackages.ctypes.pname}-foreign";
-                  inherit (self.ocamlPackages.ctypes) version src;
-                  buildInputs = with self; [ libffi ];
-                };
+                # TODO @quartz55: upstream this
+                websocketaf = super.ocamlPackages.websocketaf.overrideAttrs (_: rec {
+                  rev = "49bb812266608835b56ea75bf18f75666639a760";
+                  src = builtins.fetchurl {
+                    url = "https://github.com/quartz55/websocketaf/archive/${rev}.tar.gz";
+                    sha256 = sha256:0lsnrl8h5bmx866lflnbca4yhwzq4q67d15q51157khnchjr34rq;
+                  };
+                });
 
-                disco-opus = super.callPackage ./vendor/opus { };
+                # TODO @quartz55: update it upstream
                 relog = super.ocamlPackages.buildDunePackage rec {
                   pname = "relog";
                   version = "master";
@@ -116,6 +119,7 @@
                     substituteInPlace lib/Formatter.re --replace "Bi_outbuf" "Buffer"
                   '';
                 };
+                disco-opus = super.callPackage ./vendor/opus { };
                 disco = super.callPackage ./. { };
               };
             })
