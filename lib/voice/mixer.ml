@@ -1,160 +1,173 @@
-(* open! Disco_core.Globals
-   open Lwt.Infix
-   module L = (val Relog.logger ~namespace:__MODULE__ ())
+open! Disco_core.Globals
+module L = (val Relog.logger ~namespace:__MODULE__ ())
+module Lf_queue = Eio_utils.Lf_queue
 
-   type pcm_s16_frame =
-     (int, Bigarray.int16_signed_elt, Bigarray.c_layout) Bigarray.Array1.t
+exception Destroyed
 
-   type pcm_f32_frame =
-     (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t
+let spin_sleep ?(acc = 100_000L) dur =
+  let b = Backoff.create () in
+  let elapsed =
+    let start = Mtime_clock.now () in
+    fun () -> Mtime.span start (Mtime_clock.now ()) |> Mtime.Span.to_uint64_ns
+  in
+  (if Int64.(dur > acc) then
+   let init_s = Int64.(to_float (dur - acc)) /. 1e9 in
+   Unix.sleepf init_s);
+  while Int64.(elapsed () < dur) do
+    Backoff.once b
+  done
 
-   type silence_stream = bigstring Lwt_pipe.Reader.t
+type t = {
+  reqs : req Lf_queue.t;
+  mutable state : state;
+  mutable silence : Audio_stream.t option;
+  dead : bool Atomic.t;
+  wakeup : (unit -> unit) option Atomic.t;
+}
 
-   module Driver = struct
-     type t = {
-       mutable state : state;
-       mutable silence : silence_stream option;
-       mutable dead : bool;
-     }
+and req =
+  | Now_playing of stream option res
+  | Play of stream * unit res
+  | Stop of unit res
 
-     and state = Idle | Playing of stream
-     and stream = { waker : waker; rx : bigstring Lwt_pipe.Reader.t }
-     and waker = bool Lwt.t * bool Lwt.u
+and 'a res = ('a, exn) result -> unit
+and state = Idle | Playing of stream
+and stream = { waker : bool -> unit; rx : Audio_stream.t }
 
-     let waker : unit -> waker = Lwt.task
-     let make_silence ?n () = Audio_stream.n_silence_pipe ?n ()
-     let create () = { state = Idle; silence = None; dead = false }
-     let now () = Mtime_clock.elapsed_ns ()
-     let playing t = match t.state with Playing s -> Some s | _ -> None
-     let is_playing t = match t.state with Playing _ -> true | _ -> false
+let make_silence ?n () = Audio_stream.silence_frames ?n ()
 
-     let destroy_active t =
-       match t.state with
-       | Playing s ->
-           Lwt.wakeup_later (snd s.waker) false;
-           t.state <- Idle
-       | Idle -> ()
+let create () =
+  {
+    reqs = Lf_queue.create ();
+    state = Idle;
+    silence = None;
+    dead = Atomic.make false;
+    wakeup = Atomic.make None;
+  }
 
-     let stop = destroy_active
+let wakeup t =
+  let b = Backoff.create () in
+  let rec loop () =
+    match Atomic.get t.wakeup with
+    | None -> ()
+    | Some w as waker when Atomic.compare_and_set t.wakeup waker None -> w ()
+    | Some _ ->
+        Backoff.once b;
+        loop ()
+  in
+  loop ()
 
-     let play ~s t =
-       match t.state with
-       | Playing os ->
-           Lwt.wakeup_later (snd os.waker) false;
-           if Option.is_none t.silence then t.silence <- Some (make_silence ());
-           t.state <- Playing s
-       | Idle -> t.state <- Playing s
+let check t = if Atomic.get t.dead then raise Destroyed
 
-     let destroy t = if not t.dead then t.dead <- true
+let req t req =
+  check t;
+  Lf_queue.push t.reqs req;
+  wakeup t
 
-     let run ~yield ~play ~stop t =
-       let rec exhaust ?(i = 0) p =
-         Lwt_pipe.read p >>= function
-         | Some frame ->
-             play (i + 1) frame >>= fun ok ->
-             let i = i + 1 in
-             if ok then exhaust ~i p else Lwt.return (`Yield i)
-         | None -> Lwt.return (`Closed i)
-       in
-       let framelen = float Rtp._FRAME_LEN /. 1e3 in
-       let schedule_next ?drift ?(frames = 1) () =
-         let timeout = float frames *. framelen in
-         let with_drift d =
-           let delta = Int64.(now () - d |> to_float) /. 1e9 in
-           timeout -. Float.min delta timeout
-         in
-         let timeout =
-           Option.map with_drift drift |> Option.get_or ~default:timeout
-         in
-         L.trace (fun m ->
-             m "sent %d frames, next tick in %f seconds" frames timeout);
-         Lwt_unix.sleep timeout >|= fun () -> `Tick
-       in
-       let last_yield = ref None in
-       let last_tick = ref (now ()) in
-       let rec yield_till tick =
-         let y =
-           match !last_yield with
-           | Some y -> y
-           | None ->
-               let y = yield t in
-               last_yield := Some y;
-               y
-         in
-         Lwt.choose [ tick; (y >|= fun () -> `Yield) ] >>= function
-         | `Yield when t.dead ->
-             Lwt.cancel tick;
-             Lwt.return_unit
-         | `Yield ->
-             last_yield := None;
-             yield_till tick
-         | `Tick ->
-             let t = now () in
-             L.trace (fun m ->
-                 let delta = Int64.(t - !last_tick |> to_float) in
-                 m "tick +%2fms" (delta /. 1e6));
-             last_tick := t;
-             Lwt.return_unit
-       in
-       let rec f' ?(drift = now ()) ?(i = 0) () =
-         match (t.silence, t.state) with
-         | _ when t.dead ->
-             destroy_active t;
-             Lwt.return_unit
-         | Some s, st -> (
-             exhaust ~i s >>= function
-             | `Closed i ->
-                 t.silence <- None;
-                 (match st with Idle -> stop () | _ -> Lwt.return_unit)
-                 >>= f' ~drift ~i
-             | `Yield frames -> yield_till (schedule_next ~drift ~frames ()) >>= f'
-             )
-         | None, Idle ->
-             (match !last_yield with
-             | Some y ->
-                 last_yield := None;
-                 y
-             | None -> yield t)
-             >>= f'
-         | None, Playing s -> (
-             exhaust ~i s.rx >>= function
-             | `Closed i ->
-                 t.silence <- Some (make_silence ());
-                 t.state <- Idle;
-                 Lwt.wakeup_later (snd s.waker) true;
-                 f' ~drift ~i ()
-             | `Yield frames ->
-                 yield_till (schedule_next ~drift ~frames ()) >>= fun () -> f' ())
-       in
-       f' ()
-   end
+let now_playing t =
+  let p, u = Promise.create () in
+  req t (Now_playing (Promise.resolve u));
+  Promise.await_exn p
 
-   type t = { driver : Driver.t; evloop_tx : evloop_msg Lwt_pipe.Writer.t }
-   and evloop_msg = Stop | Play of pcm_s16_frame Lwt_pipe.Reader.t * Driver.waker
+let is_playing t = Option.is_some @@ now_playing t
 
-   let create ?(burst = 15) out =
-     let chan = Lwt_pipe.create () in
-     let evloop_tx = Lwt_pipe.Writer.map ~f:(fun msg -> `Req msg) chan in
-     let driver = Driver.create () in
-     let yield driver =
-       Lwt_pipe.read chan >|= Option.get_or ~default:`Poison >|= function
-       | `Req (Play (s, waker)) ->
-           let s = Lwt_pipe.Reader.filter_map ~f:encode s in
-           Driver.play driver ~s:{ waker; rx = s }
-       | `Req Stop -> Driver.stop driver
-       | `Poison -> Driver.destroy driver
-     in
-     let play i frame = out (`Play frame) >|= fun r -> r && i < burst in
-     let stop () = out `Stop >|= ignore in
-     let f = Driver.run ~yield ~play ~stop driver in
-     Lwt_pipe.keep chan f;
-     Lwt_pipe.link_close chan ~after:evloop_tx;
-     Lwt.on_termination f (fun () -> Lwt_pipe.close_nonblock chan);
-     { driver; evloop_tx }
+let stop t =
+  let p, u = Promise.create () in
+  req t (Stop (Promise.resolve u));
+  Promise.await_exn p
 
-   let play ?(k = fun ~status:_ s -> Lwt_pipe.close_nonblock s) t stream =
-     let ((wp, _) as waker) = Driver.waker () in
-     Lwt.on_success wp (fun status -> k ~status stream);
-     Lwt_pipe.write_exn t.evloop_tx (Play (stream, waker))
+let play ~s t =
+  let p, u = Promise.create () in
+  req t (Play (s, Promise.resolve u));
+  Promise.await_exn p
 
-   let destroy t = Lwt_pipe.close_nonblock t.evloop_tx *)
+let destroy t =
+  Atomic.set t.dead true;
+  wakeup t
+
+let destroy_active t =
+  match t.state with
+  | Playing s ->
+      s.waker false;
+      t.state <- Idle
+  | Idle -> ()
+
+let run ~play ~stop t =
+  let now () = Mtime_clock.elapsed_ns () in
+  let rec exhaust ?(i = 0) src =
+    Audio_stream.read src |> function
+    | Some frame ->
+        let i = i + 1 in
+        if play (i + 1) frame then exhaust ~i src else `Yield i
+    | None -> `Closed i
+  in
+  let framelen = Int64.(of_int Rtp._FRAME_LEN * 100_000L) in
+  let schedule_next ?drift ?(frames = 1) () =
+    let timeout = Int64.(of_int frames * framelen) in
+    let with_drift d =
+      let delta = Int64.(now () - d) in
+      Int64.(timeout - min delta timeout)
+    in
+    let timeout =
+      Option.map with_drift drift |> Option.get_or ~default:timeout
+    in
+    L.trace (fun m ->
+        m "sent %d frames, next tick in %Ld ns (%f s)" frames timeout
+          (Int64.to_float timeout /. 1e9));
+    spin_sleep timeout
+  in
+  let rec loop ?(drift = now ()) ?(i = 0) () =
+    if Atomic.get t.dead then (
+      destroy_active t;
+      (* TODO @quartz55: cancel/cleanup queued requests (how?) *)
+      raise Exit);
+    handle_reqs ();
+    process ~drift ~i
+  and handle_reqs () =
+    match Lf_queue.pop t.reqs with
+    | Some (Play (s, res)) ->
+        (match t.state with
+        | Playing os ->
+            os.waker false;
+            if Option.is_none t.silence then t.silence <- Some (make_silence ());
+            t.state <- Playing s
+        | Idle -> t.state <- Playing s);
+        res (Ok ());
+        handle_reqs ()
+    | Some (Stop res) ->
+        destroy_active t;
+        res (Ok ());
+        handle_reqs ()
+    | Some (Now_playing res) ->
+        res @@ Ok (match t.state with Idle -> None | Playing s -> Some s);
+        handle_reqs ()
+    | None -> ()
+  and process ~drift ~i =
+    match (t.silence, t.state) with
+    | Some s, st -> (
+        exhaust ~i s |> function
+        | `Closed i ->
+            t.silence <- None;
+            (match st with Idle -> stop () | _ -> ());
+            loop ~drift ~i ()
+        | `Yield frames ->
+            schedule_next ~drift ~frames ();
+            loop ())
+    | None, Playing s -> (
+        exhaust ~i s.rx |> function
+        | `Closed i ->
+            t.silence <- Some (make_silence ());
+            t.state <- Idle;
+            s.waker true;
+            loop ~drift ~i ()
+        | `Yield frames ->
+            schedule_next ~drift ~frames ();
+            loop ())
+    | None, Idle ->
+        assert (Option.is_none @@ Atomic.get t.wakeup);
+        let p, u = Promise.create () in
+        Atomic.set t.wakeup (Some (Promise.resolve u));
+        Promise.await p;
+        loop ()
+  in
+  try loop () with Exit -> ()

@@ -60,6 +60,7 @@ type t = {
   channel_id : snowflake;
   token : string;
   session_id : string;
+  endpoint : string;
   uri : Uri.t;
   ops : op Eio.Stream.t;
   mutable state : state;
@@ -303,6 +304,7 @@ let create ~sw ~net ?(version = Versions.V4) ~guild_id ~user_id ~channel_id
         state;
         version;
         token;
+        endpoint;
         uri;
         sw;
       }
@@ -315,3 +317,10 @@ let create ~sw ~net ?(version = Versions.V4) ~guild_id ~user_id ~channel_id
   in
   Fiber.fork ~sw (fun () -> match spawn () with _ -> . | exception Exit -> ());
   Promise.await p
+
+let guild_id { guild_id; _ } = guild_id
+let user_id { user_id; _ } = user_id
+let channel_id { channel_id; _ } = channel_id
+let session_id { session_id; _ } = session_id
+let token { token; _ } = token
+let endpoint { endpoint; _ } = endpoint

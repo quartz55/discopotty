@@ -1,7 +1,7 @@
 open Containers
 module D = Disco
 module Voice = Disco_voice
-module Client = D.Client
+module Client = D.Client.Make (Voice.Manager)
 module M = Disco_models
 module Msg = M.Message
 module L = (val Relog.logger ~namespace:"Discopotty" ())
@@ -36,8 +36,7 @@ let handler cfg client =
   Sys.set_signal Sys.sigint
     (Sys.Signal_handle (fun _ -> Client.disconnect client));
   function
-  | Disco_core.Events.Message_create { content; channel_id; guild_id = _; _ }
-    -> (
+  | Disco_core.Events.Message_create { content; channel_id; guild_id; _ } -> (
       match Cmd.of_message ~prefix content with
       | None -> ()
       | Some ("ping", args) ->
@@ -65,23 +64,23 @@ let handler cfg client =
             Msg.fmt "⚠️ Not supported yet, please provide a voice channel id"
           in
           Client.send_message channel_id msg client
-      (* | Some ("join", vchan) -> (
-             let guild_id = Option.get_exn guild_id in
-             let vchan = M.Snowflake.of_string vchan in
-             let voice = Client.voice client in
-             let call = Voice.Manager.get ~guild_id voice in
-             Voice.Call.join call ~channel_id:vchan >>= function
-             | Error e ->
-                 let msg =
-                   Msg.fmt "⚠️ Couldn't join voice channel: %a" Voice.Error.pp e
-                 in
-                 Client.send_message channel_id msg client
-             | Ok () -> Lwt.return_unit)
-         | Some ("leave", _) ->
-             let guild_id = Option.get_exn guild_id in
-             let voice = Client.voice client in
-             let call = Voice.Manager.get ~guild_id voice in
-             Voice.Call.leave call *)
+      | Some ("join", vchan) -> (
+          let guild_id = Option.get_exn guild_id in
+          let vchan = M.Snowflake.of_string vchan in
+          let voice = Client.voice client in
+          let call = Voice.Manager.get ~guild_id voice in
+          try Voice.Call.join call ~channel_id:vchan
+          with exn ->
+            let msg =
+              Msg.fmt "⚠️ Couldn't join voice channel: %s"
+                (Printexc.to_string exn)
+            in
+            Client.send_message channel_id msg client)
+      | Some ("leave", _) ->
+          let guild_id = Option.get_exn guild_id in
+          let voice = Client.voice client in
+          let call = Voice.Manager.get ~guild_id voice in
+          Voice.Call.leave call
       (* | Some ("join", v_channel_id) ->
              let guild_id = Option.get_exn guild_id in
              let channel_id = M.Snowflake.of_string v_channel_id in
@@ -142,10 +141,10 @@ let main env =
   let token = Config.token config in
   try Client.run ~env ~handler:(handler config) token
   with e ->
-    L.err (fun m ->
-        m "fatal exception: %s@.%s" (Printexc.to_string e)
-          (Printexc.get_backtrace ()));
+    let bt, es = Printexc.(get_backtrace (), to_string e) in
+    L.err (fun m -> m "fatal exception: %s@.%s" es bt);
     exit (-1)
 
 let () =
-  Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () -> Eio_luv.run main
+  Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () ->
+  Eio_luv.run (fun env -> main (env :> Eio.Stdenv.t))

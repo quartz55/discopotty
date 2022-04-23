@@ -173,15 +173,20 @@ let create ~sw ~net ~ssrc (ip, port) =
   let p, u = Promise.create () in
   let run () : no_return =
     Switch.run @@ fun sw ->
-    let discord_addr = `Udp (Eio.Net.Ipaddr.of_raw ip, port) in
-    let sock = Eio.Net.datagram_socket ~sw net discord_addr in
-    L.info (fun m ->
-        m "discovering external ip using discord's voice server: %s:%d" ip port);
+    let ipaddr = Eio_unix.Ipaddr.of_unix @@ Unix.inet_addr_of_string ip in
+    let discord_addr = `Udp (ipaddr, port) in
+    L.dbg (fun m ->
+        m "discovering external ip using discord's voice server: %a"
+          Eio.Net.Sockaddr.pp discord_addr);
+    let sock =
+      Eio.Net.datagram_socket ~sw net @@ `Udp (Eio.Net.Ipaddr.V4.any, 0)
+    in
     let ip_d, port_d =
       ip_discovery ~ssrc ~addr:discord_addr sock |> Result.get_exn
     in
-    L.info (fun m -> m "discovered ip and port: %s:%d" ip_d port_d);
-    let local_addr = `Udp (Eio.Net.Ipaddr.of_raw ip_d, port_d) in
+    L.dbg (fun m -> m "discovered ip and port: %s:%d" ip_d port_d);
+    let ipaddr_d = Eio_unix.Ipaddr.of_unix @@ Unix.inet_addr_of_string ip_d in
+    let local_addr = `Udp (ipaddr_d, port_d) in
     let sync = Eio.Stream.create 0 in
     let send = Eio.Stream.add sync in
     let t = { sw; sock; local_addr; discord_addr; ssrc; send } in

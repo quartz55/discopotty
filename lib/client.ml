@@ -6,7 +6,7 @@ module SfMap = Map.Make (Models.Snowflake)
 module type Voice_manager_intf = sig
   type t
 
-  val make : Gateway.t -> t
+  val make : env:Eio.Stdenv.t -> sw:Eio.Switch.t -> Gateway.t -> t
   val destroy : t -> unit
 end
 
@@ -54,16 +54,17 @@ module Make (Voice : Voice_manager_intf) = struct
     L.info (fun m -> m "initialising cache");
     let cache = Cache.create () in
     L.info (fun m -> m "initialising voice manager");
-    let voice = Voice.make gw in
+    let voice = Voice.make ~env ~sw gw in
     let t = { http; gw; cache; voice } in
     L.info (fun m -> m "starting main event loop");
-    Gateway.sub ~fn:(handler t) gw
+    let fn = handler t in
+    Gateway.sub ~fn gw
 end
 
 module Nop_voice = struct
   type t = Nop
 
-  let make _ = Nop
+  let make ~env:_ ~sw:_ _ = Nop
   let destroy _ = ()
 end
 

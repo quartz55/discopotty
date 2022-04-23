@@ -1,233 +1,216 @@
-(* open! Disco_core.Globals
-   open Lwt.Infix
-   module Snowflake = Disco_models.Snowflake
-   module E = Disco_core.Events
-   module Gateway = Disco_core.Gateway
-   module F = Relog.Field
+open! Disco_core.Globals
+module Snowflake = Disco_models.Snowflake
+module E = Disco_core.Events
+module Gateway = Disco_core.Gateway
+module F = Relog.Field
+module L = (val Relog.logger ~namespace:__MODULE__ ())
 
-   module L = (val Relog.logger ~namespace:"Disco_voice__Call" ())
+exception Detached
+exception Timed_out
 
-   type 'a req = ('a, Error.t) result Lwt.t * ('a, Error.t) result Lwt.u
+type srv_info = { token : string; endpoint : string }
+type sess_info = { channel_id : snowflake; session_id : string }
 
-   type srv_info = { token : string; endpoint : string }
+type t = {
+  gw : Gateway.t;
+  guild_id : snowflake;
+  mixer : Mixer.t;
+  conn : conn Atomic.t;
+  mutable muted : bool;
+  mutable deafened : bool;
+  evs : events Eio.Stream.t;
+}
 
-   type sess_info = { channel_id : snowflake; session_id : string }
+and conn =
+  | Detached of unit req
+  | Init of { cid : snowflake; req : unit req; info : conn_info }
+  | Live of Session.t
 
-   type t = {
-     gw : Gateway.t;
-     mixer : Mixer.t;
-     guild_id : snowflake;
-     mutable muted : bool;
-     mutable deafened : bool;
-     tx : op Lwt_pipe.Writer.t;
-   }
+and conn_info = Empty | Got_srv of srv_info | Got_sess of sess_info
 
-   and op = Req of op_req | Gw of gw_update
+and events =
+  | Req_join of snowflake * unit req
+  | Gw_srv of srv_info
+  | Gw_sess of sess_info
+  | Gw_dc
 
-   and op_req = Join of snowflake * unit req
+and 'a req = ('a, exn) result -> unit
 
-   and gw_update = Srv of srv_info | Sess of sess_info | Dc
+let wait_for_session conn =
+  let b = Backoff.create () in
+  let rec loop () =
+    match Atomic.get conn with
+    | Live session -> session
+    | Init ({ req = o_req; _ } as init) as st ->
+        let p, u = Promise.create () in
+        if
+          Atomic.compare_and_set conn st
+            (Init
+               {
+                 init with
+                 req =
+                   (fun res ->
+                     o_req res;
+                     Promise.resolve u ());
+               })
+        then Promise.await p
+        else Backoff.once b;
+        loop ()
+    | Detached o_req as st ->
+        let p, u = Promise.create () in
+        if
+          Atomic.compare_and_set conn st
+            (Detached
+               (fun res ->
+                 o_req res;
+                 Promise.resolve u ()))
+        then Promise.await p
+        else Backoff.once b;
+        loop ()
+  in
+  loop ()
 
-   type conn =
-     | Detached
-     | Init of { channel_id : snowflake; req : unit req; info : conn_info }
-     | Connecting of { channel_id : snowflake; req : unit req }
-     | Live of Session.t
+let stub _ = ()
 
-   and conn_info = Empty | Got_srv of srv_info | Got_sess of sess_info
+let manage ~net ~dmgr t =
+  Switch.run @@ fun sw ->
+  let user_id = (Gateway.user t.gw).id in
+  let connect ~srv ~sess =
+    Session.create ~sw ~net ~guild_id:t.guild_id ~user_id
+      ~channel_id:sess.channel_id ~session_id:sess.session_id ~token:srv.token
+      srv.endpoint
+  in
+  let mixer_thread () =
+    Switch.on_release sw (fun () -> Mixer.destroy t.mixer);
+    Eio.Domain_manager.run dmgr @@ fun () ->
+    let play i f =
+      let s = wait_for_session t.conn in
+      Session.start_speaking s;
+      Session.send_rtp s f;
+      i < 15
+    in
+    let stop () = wait_for_session t.conn |> Session.stop_speaking in
+    Mixer.run ~play ~stop t.mixer
+  in
+  let b = Backoff.create () in
+  let rec main_thread () =
+    let ev = Eio.Stream.take t.evs in
+    handle ev
+  and cas ~ev ost nst fn =
+    if Atomic.compare_and_set t.conn ost nst then fn ()
+    else (
+      Backoff.once b;
+      handle ev)
+  and handle ev =
+    match (Atomic.get t.conn, ev) with
+    | (Detached o_req as st), Req_join (cid, n_req) ->
+        let req res =
+          o_req res;
+          n_req res
+        in
+        cas ~ev st (Init { cid; req; info = Empty }) @@ fun () ->
+        (* TODO timeout *)
+        L.info (fun m -> m "join request while detached");
+        Gateway.send_voice_state_update t.gw ~channel_id:cid ~self_mute:t.muted
+          ~self_deaf:t.deafened t.guild_id;
+        main_thread ()
+    | Detached _, (Gw_dc | Gw_sess _ | Gw_srv _) ->
+        L.warn (fun m -> m "gateway event on detached call");
+        main_thread ()
+    | Init { info = Got_sess sess; req; _ }, Gw_srv srv
+    | Init { info = Got_srv srv; req; _ }, Gw_sess sess ->
+        (* any race conditions with mixer that require a CAS & extra state ? *)
+        let res =
+          match connect ~srv ~sess with
+          | sess ->
+              Atomic.set t.conn @@ Live sess;
+              Ok ()
+          | exception exn ->
+              Atomic.set t.conn @@ Detached stub;
+              Error exn
+        in
+        req res;
+        main_thread ()
+    | (Init ({ info = Got_sess _ | Empty; _ } as init) as st), Gw_sess sess ->
+        cas ~ev st (Init { init with info = Got_sess sess }) @@ main_thread
+    | (Init ({ info = Got_srv _ | Empty; _ } as init) as st), Gw_srv srv ->
+        cas ~ev st (Init { init with info = Got_srv srv }) @@ main_thread
+    | (Init { req; _ } as st), Gw_dc ->
+        cas ~ev st (Detached stub) @@ fun () -> req @@ Error Detached
+    | (Init ({ cid; req = o_req; _ } as init) as st), Req_join (n_cid, n_req)
+      when Snowflake.(cid = n_cid) ->
+        let req res =
+          o_req res;
+          n_req res
+        in
+        cas ~ev st (Init { init with req }) @@ main_thread
+    | (Init ({ req = o_req; _ } as init) as st), Req_join _ ->
+        let req res =
+          o_req res;
+          Eio.Stream.add t.evs ev
+        in
+        cas ~ev st (Init { init with req }) @@ main_thread
+    | Live sess, Req_join (cid, req)
+      when Snowflake.(cid = Session.channel_id sess) ->
+        req @@ Ok ()
+    | (Live sess as st), Req_join _ ->
+        cas ~ev st (Detached stub) @@ fun () ->
+        L.info (fun m -> m "join request while live, switching channels");
+        Session.disconnect sess;
+        handle ev
+    | (Live sess as st), Gw_sess nsess
+      when Snowflake.(Session.channel_id sess <> nsess.channel_id)
+           || String.(Session.session_id sess <> nsess.session_id) ->
+        let srv = Session.{ token = token sess; endpoint = endpoint sess } in
+        cas ~ev st
+          (Init { req = stub; cid = nsess.channel_id; info = Got_srv srv })
+        @@ fun () ->
+        L.warn (fun m -> m "new voice session info, reconnecting");
+        Session.disconnect sess;
+        handle ev
+    | (Live sess as st), Gw_dc ->
+        cas ~ev st (Detached stub) @@ fun () ->
+        L.info (fun m -> m "disconnected");
+        Session.disconnect sess;
+        main_thread ()
+    | Live _, (Gw_sess _ | Gw_srv _) -> main_thread ()
+  in
+  Fiber.both main_thread mixer_thread;
+  Mixer.destroy t.mixer;
+  raise Exit
 
-   let make ?(muted = false) ?(deafened = false) ~guild_id gw =
-     let ( let+ ) = Result.( let+ ) in
-     let op_rx = Lwt_pipe.create () in
-     let mixer_rx = Lwt_pipe.create () in
-     let+ mixer = Mixer.create (Lwt_pipe.write mixer_rx) in
-     let t = { gw; guild_id; muted; deafened; tx = op_rx; mixer } in
+let make ~sw ~net ~dmgr ?(muted = false) ?(deafened = false) ~guild_id gw =
+  let t =
+    {
+      gw;
+      guild_id;
+      mixer = Mixer.create ();
+      conn = Atomic.make @@ Detached stub;
+      muted;
+      deafened;
+      evs = Eio.Stream.create max_int;
+    }
+  in
+  Fiber.fork ~sw (fun () -> try manage ~net ~dmgr t with Exit -> ());
+  t
 
-     let read_op () =
-       Lwt_pipe.read op_rx >|= Option.get_exn >|= function
-       | Req r -> `Op r
-       | Gw g -> `Gw g
-     in
-     let _read_mixer () =
-       Lwt_pipe.read mixer_rx >|= Option.get_exn >|= fun mix -> `Mixer mix
-     in
+let update_server ~token ~endpoint t =
+  Eio.Stream.add t.evs @@ Gw_srv { token; endpoint }
 
-     let do_connect ~srv ~sess =
-       let user_id = (Gateway.user t.gw).id in
-       let guild_id = t.guild_id in
-       Session.create ~guild_id ~user_id ~channel_id:sess.channel_id
-         ~session_id:sess.session_id ~token:srv.token srv.endpoint
-     in
+let update_session ?channel_id ~session_id t =
+  let ev =
+    match channel_id with
+    | None -> Gw_dc
+    | Some channel_id -> Gw_sess { channel_id; session_id }
+  in
+  Eio.Stream.add t.evs ev
 
-     let run () =
-       let conn = ref Detached in
-       let rec poll q =
-         Lwt.nchoose_split q >>= function
-         | [], [] -> Lwt_result.return ()
-         | rs, ps -> (
-             match handle ps rs with
-             | Ok [] -> Lwt_result.return ()
-             | Ok q -> poll q
-             | Error _ as err -> Lwt.return err)
-       and handle out rs =
-         match (rs, !conn) with
-         | [], _ -> Ok out
-         | `Noop :: xs, _ -> handle out xs
-         | `Cancel :: xs, Init { req; _ } ->
-             Lwt.wakeup_later (snd req) @@ Error.msg "timed out";
-             conn := Detached;
-             handle out xs
-         | `Cancel :: xs, _ -> handle out xs
-         | `Connected (Ok session) :: xs, (Init { req; _ } | Connecting { req; _ })
-           ->
-             conn := Live session;
-             L.info (fun m -> m "connected");
-             Lwt.wakeup_later (snd req) (Ok ());
-             handle out xs
-         | ( `Connected (Error _ as err) :: xs,
-             (Init { req; _ } | Connecting { req; _ }) ) ->
-             conn := Detached;
-             L.err (fun m -> m "error connecting");
-             Lwt.wakeup_later (snd req) err;
-             handle out xs
-         | `Connected (Ok session) :: xs, _ ->
-             conn := Live session;
-             handle out xs
-         | `Connected (Error _) :: xs, _ ->
-             conn := Detached;
-             handle out xs
-         | ( (`Op (Join (cid, nreq)) as op) :: xs,
-             (Init { req; channel_id; _ } | Connecting { req; channel_id; _ }) ) ->
-             L.info (fun m -> m "join request while connecting");
-             if Snowflake.(cid = channel_id) then (
-               Lwt.async (fun () ->
-                   fst req >|= fun res -> Lwt.wakeup_later (snd nreq) res);
-               handle (read_op () :: out) xs)
-             else handle (Lwt.return op :: read_op () :: out) xs
-         | `Op (Join (channel_id, req)) :: xs, Live session ->
-             L.info (fun m -> m "join request while connected");
-             if Snowflake.(channel_id = Session.channel_id session) then (
-               Lwt.wakeup_later (snd req) (Ok ());
-               handle (read_op () :: out) xs)
-             else (
-               conn := Init { channel_id; req; info = Empty };
-               let reconn =
-                 Session.disconnect session >>= fun () ->
-                 Gateway.send_voice_state_update t.gw ~channel_id
-                   ~self_mute:t.muted ~self_deaf:t.deafened t.guild_id
-                 >|= fun () -> `Noop
-               in
-               handle (reconn :: read_op () :: out) xs)
-         | `Op (Join (channel_id, req)) :: xs, Detached ->
-             L.info (fun m -> m "join request while detached");
-             conn := Init { channel_id; req; info = Empty };
-             let send =
-               Gateway.send_voice_state_update t.gw ~channel_id ~self_mute:t.muted
-                 ~self_deaf:t.deafened t.guild_id
-               >|= fun () -> `Noop
-             in
-             let timeout =
-               Lwt.pick
-                 [
-                   (Lwt_unix.sleep 5. >|= fun () -> `Cancel);
-                   (fst req >|= fun _ -> `Noop);
-                 ]
-             in
-             handle (send :: timeout :: read_op () :: out) xs
-         | `Gw Dc :: xs, Live session ->
-             L.info (fun m -> m "disconnected");
-             conn := Detached;
-             let dc = Session.disconnect session >|= fun () -> `Noop in
-             handle (dc :: read_op () :: out) xs
-         | `Gw (Srv srv) :: xs, Live s ->
-             if
-               String.(
-                 Session.endpoint s <> srv.endpoint || Session.token s <> srv.token)
-             then (
-               L.warn (fun m -> m "new voice server info, reconnecting");
-               let req = Lwt.wait () in
-               let sess =
-                 {
-                   session_id = Session.session_id s;
-                   channel_id = Session.channel_id s;
-                 }
-               in
-               conn := Connecting { channel_id = sess.channel_id; req };
-               let reconn =
-                 Session.disconnect s >>= fun () ->
-                 do_connect ~srv ~sess >|= fun res -> `Connected res
-               in
-               handle (reconn :: read_op () :: out) xs)
-             else handle (read_op () :: out) xs
-         | `Gw (Sess sess) :: xs, Live s ->
-             if
-               Snowflake.(Session.channel_id s <> sess.channel_id)
-               || String.(Session.session_id s <> sess.session_id)
-             then (
-               L.warn (fun m -> m "new voice session info, reconnecting");
-               let req = Lwt.wait () in
-               let srv =
-                 { token = Session.token s; endpoint = Session.endpoint s }
-               in
-               conn := Connecting { channel_id = sess.channel_id; req };
-               let reconn =
-                 Session.disconnect s >>= fun () ->
-                 do_connect ~srv ~sess >|= fun res -> `Connected res
-               in
-               handle (reconn :: read_op () :: out) xs)
-             else handle (read_op () :: out) xs
-         | `Gw _ :: xs, Detached ->
-             L.warn (fun m -> m "gateway event on detached call");
-             handle (read_op () :: out) xs
-         | (`Gw _ as ev) :: xs, Connecting _ ->
-             L.info (fun m -> m "buffering gw event while connecting");
-             handle (Lwt.return ev :: read_op () :: out) xs
-         | `Gw (Srv srv) :: xs, Init { info = Got_sess sess; channel_id; req }
-         | `Gw (Sess sess) :: xs, Init { info = Got_srv srv; channel_id; req } ->
-             conn := Connecting { channel_id; req };
-             let connect = do_connect ~srv ~sess >|= fun res -> `Connected res in
-             handle (connect :: read_op () :: out) xs
-         | `Gw (Srv nsrv) :: xs, Init ({ info = Got_srv _ | Empty; _ } as init) ->
-             conn := Init { init with info = Got_srv nsrv };
-             handle (read_op () :: out) xs
-         | `Gw (Sess nsess) :: xs, Init ({ info = Got_sess _ | Empty; _ } as init)
-           ->
-             conn := Init { init with info = Got_sess nsess };
-             handle (read_op () :: out) xs
-         | `Gw Dc :: xs, Init { req; _ } ->
-             Lwt.wakeup_later (snd req) (Error.msg "dc'ed when connecting?");
-             handle (read_op () :: out) xs
-       in
-       poll [ read_op () ]
-     in
-     let evloop =
-       run () >|= function
-       | Ok () -> ()
-       | Error e -> L.err (fun m -> m "call evloop crashed: %a" Error.pp e)
-     in
-     Lwt_pipe.keep op_rx evloop;
-     Lwt.on_termination evloop (fun () ->
-         Lwt_pipe.close_nonblock op_rx;
-         Mixer.destroy mixer;
-         Lwt_pipe.close_nonblock mixer_rx);
-     t
+let join ~channel_id t =
+  let p, u = Promise.create () in
+  Eio.Stream.add t.evs @@ Req_join (channel_id, Promise.resolve u);
+  Promise.await_exn p
 
-   let update_server ~token ~endpoint t =
-     Lwt_pipe.write_exn t.tx @@ Gw (Srv { token; endpoint })
-
-   let update_session ?channel_id ~session_id t =
-     let upd =
-       match channel_id with
-       | None -> Dc
-       | Some channel_id -> Sess { channel_id; session_id }
-     in
-     Lwt_pipe.write_exn t.tx @@ Gw upd
-
-   let join ~channel_id t =
-     let req = Lwt.wait () in
-     Lwt_pipe.write_exn t.tx @@ Req (Join (channel_id, req)) >>= fun () -> fst req
-
-   let leave t =
-     Lwt_pipe.write t.tx @@ Gw Dc >>= fun _ ->
-     Gateway.send_voice_state_update t.gw ~self_mute:t.muted ~self_deaf:t.deafened
-       t.guild_id *)
+let leave t =
+  Eio.Stream.add t.evs Gw_dc;
+  Gateway.send_voice_state_update t.gw ~self_mute:t.muted ~self_deaf:t.deafened
+    t.guild_id
