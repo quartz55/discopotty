@@ -1,10 +1,9 @@
 open Containers
-
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
 (* author's note: decided to go with unboxed ints
-in the end, I don't expect this to be used in systems
-other than 64 bit (and 63 bits is more than enough) *)
+   in the end, I don't expect this to be used in systems
+   other than 64 bit (and 63 bits is more than enough) *)
 type t = {
   capacity : int;
   capacity_ns : int;
@@ -33,9 +32,7 @@ let make ~capacity ?init rate =
   }
 
 let capacity { capacity; _ } = capacity
-
 let rate { ns_per_token; _ } = 1. /. (float ns_per_token /. 1e9)
-
 let is_full { capacity_ns; tokens; _ } = tokens >= capacity_ns
 
 let fill t =
@@ -98,7 +95,6 @@ let take ?(n = 1) t =
   | false -> enqueue' ()
 
 let take_then ~f ?n t = take ?n t |> Lwt.map (fun () -> f ())
-
 let wrap_take ~f t ?(n = 1) () = Lwt.bind (take ~n t) (fun () -> f)
 
 let cancel_waiting t =

@@ -1,6 +1,6 @@
 .DS_Store
 node_modules/
-**.bs.js
+**.bs
 token.txt
 *.exe
 *.obj
@@ -30,5 +30,10 @@ token.txt
 .direnv
 _esy
 *.install
+_build
 discopotty.toml
 .discostore
+
+*.ctf
+# nix artifacts
+result

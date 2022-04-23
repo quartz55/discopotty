@@ -1,3 +1,4 @@
+open! Globals
 module Flow = Eio.Flow
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -64,7 +65,7 @@ let read_react t =
         (match res with `Ok _ -> () | _ -> Flow.close t.flow);
         L.trace (fun m ->
             m "data@.%a"
-              (CCOpt.pp (Hxd_string.pp Hxd.default))
+              (Option.pp (Hxd_string.pp Hxd.default))
               (Option.map Cstruct.to_string data));
         data
     | Error (fail, `Response resp) ->

@@ -24,7 +24,8 @@ let server_update t srv =
   L.info (fun m -> m "srv update");
   Sf_map.get srv.E.Voice_server_update.guild_id t.calls
   |> Option.iter (fun call ->
-         Call.update_server ~token:srv.token ~endpoint:srv.endpoint call)
+         Call.update_server ~token:srv.E.Voice_server_update.token
+           ~endpoint:srv.endpoint call)
 
 let state_update t vst =
   Eio_mutex.with_ t.mtx @@ fun () ->

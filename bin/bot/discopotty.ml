@@ -36,7 +36,8 @@ let handler cfg client =
   Sys.set_signal Sys.sigint
     (Sys.Signal_handle (fun _ -> Client.disconnect client));
   function
-  | Disco_core.Events.Message_create { content; channel_id; guild_id; _ } -> (
+  | Disco_core.Events.Message_create
+      { content; channel_id; guild_id = Some guild_id; _ } -> (
       match Cmd.of_message ~prefix content with
       | None -> ()
       | Some ("ping", args) ->
@@ -65,7 +66,7 @@ let handler cfg client =
           in
           Client.send_message channel_id msg client
       | Some ("join", vchan) -> (
-          let guild_id = Option.get_exn guild_id in
+          let guild_id = guild_id in
           let vchan = M.Snowflake.of_string vchan in
           let voice = Client.voice client in
           let call = Voice.Manager.get ~guild_id voice in
@@ -77,7 +78,7 @@ let handler cfg client =
             in
             Client.send_message channel_id msg client)
       | Some ("leave", _) ->
-          let guild_id = Option.get_exn guild_id in
+          let guild_id = guild_id in
           let voice = Client.voice client in
           let call = Voice.Manager.get ~guild_id voice in
           Voice.Call.leave call

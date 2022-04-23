@@ -55,7 +55,7 @@ let conn_info uri =
     | Some "https" | None -> true
     | Some scheme -> raise @@ Invalid_scheme scheme
   in
-  let host = Uri.host uri |> Option.get_exn in
+  let host = Uri.host uri |> Option.get_exn_or "empty host" in
   let port = Uri.port uri |> Option.get_or ~default:(if tls then 443 else 80) in
   let addrs =
     Unix.getaddrinfo host (Int.to_string port)

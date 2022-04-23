@@ -1,7 +1,5 @@
 open! Disco_core.Globals
-
 module L = (val Relog.logger ~namespace:__MODULE__ ())
-
 module Payload = Disco_core.Payload
 module Dir = Payload.Dir
 module Raw = Payload.Raw

@@ -84,7 +84,7 @@ let _uri_info uri =
     | Some "wss" | Some "https" | None -> true
     | Some scheme -> failwith ("unsupported websocket scheme: " ^ scheme)
   in
-  let host = Uri.host uri |> Option.get_exn in
+  let host = Uri.host uri |> Option.get_exn_or "empty host" in
   let port = Uri.port uri |> Option.get_or ~default:(if tls then 443 else 80) in
   let resource = Uri.path_and_query uri in
   (host, port, tls, resource)
@@ -180,7 +180,9 @@ functor
         | `Handshake_failure (rsp, _)
           when Httpaf.(Status.is_redirection rsp.Response.status) ->
             let loc =
-              Httpaf.Headers.get rsp.headers "Location" |> Option.get_exn
+              Httpaf.Headers.get rsp.headers "Location"
+              |> Option.get_exn_or
+                   "missing location header in redirect response"
             in
             L.warn (fun m ->
                 m "got redirection to '%s' during websocket handshake" loc

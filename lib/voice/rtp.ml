@@ -1,11 +1,8 @@
 open! Disco_core.Globals
 
 let _SAMPLE_RATE = 48000
-
 let _CHANNELS = 2
-
 let _FRAME_LEN = 20
-
 let _FRAME_SIZE = _SAMPLE_RATE / 1000 * _FRAME_LEN
 
 (** Maximum packet size for a voice packet.
@@ -34,7 +31,6 @@ module Sync = struct
     (seq, ts)
 
   let seq = fst
-
   let ts = snd
 
   let tick (seq, ts) =
@@ -48,9 +44,7 @@ type t = {
 }
 
 let make ~udp ~crypt = { udp; crypt; sync = Sync.make () }
-
 let ssrc { udp; _ } = udp.ssrc
-
 let set_crypt t crypt = t.crypt <- crypt
 
 let send_packet t bs =

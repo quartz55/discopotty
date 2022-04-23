@@ -208,9 +208,12 @@ let create ~sw ~net ~ssrc (ip, port) =
               List.fold_left (fun n Faraday.{ len; _ } -> n + len) 0 vecs
             in
             let buf = Cstruct.create_unsafe len in
-            List.fold_left (fun dstoff Faraday.{ buffer; len; off } ->
-                Cstruct.blit buffer off buf dstoff len;
+            List.fold_left
+              (fun dstoff Faraday.{ buffer; len; off } ->
+                let src = Cstruct.of_bigarray ~off ~len buffer in
+                Cstruct.blit src off buf dstoff len;
                 dstoff + len)
+              0 vecs
             |> ignore;
             Eio.Net.send sock discord_addr buf;
             len

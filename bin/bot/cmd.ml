@@ -4,7 +4,6 @@ module P = struct
   open Angstrom
 
   let is_ws = function ' ' | '\t' | '\n' -> true | _ -> false
-
   let ws = skip_while is_ws
 
   let cmd prefix =

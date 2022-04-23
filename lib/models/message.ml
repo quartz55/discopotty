@@ -59,25 +59,15 @@ module Utils = struct
     Bytes.unsafe_to_string buf
 
   let ( & ) x y a = x a |> y
-
   let ( || ) f a = f a
-
   let bold = wrap ~c:"**"
-
   let b = bold
-
   let strong = bold
-
   let italic = wrap ~c:"_"
-
   let i = italic
-
   let it = italic
-
   let verbatim = wrap ~c:"`"
-
   let v = verbatim
-
   let code = verbatim
 
   let _setup_ppf =

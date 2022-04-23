@@ -35,60 +35,60 @@ module R = struct
 end
 
 (* module S = struct
-  type voice = { user_limit : int; bitrate : int; rtc_region : string option }
-  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+     type voice = { user_limit : int; bitrate : int; rtc_region : string option }
+     [@@deriving yojson, show] [@@yojson.allow_extra_fields]
 
-  type guild = {
-    guild_id : Snowflake.t option; [@yojson.option]
-    position : int;
-    permission_overwrites : R.overwrite list;
-    name : string;
-    topic : string option;
-    nsfw : bool;
-    last_message_id : Snowflake.t option;
-    last_pin_timestamp : string option;
-    rate_limit_per_user : int option; [@yojson.option]
-    parent_id : Snowflake.t option;
-  }
-  [@@deriving yojson, show] [@@yojson.allow_extra_fields]
-end
+     type guild = {
+       guild_id : Snowflake.t option; [@yojson.option]
+       position : int;
+       permission_overwrites : R.overwrite list;
+       name : string;
+       topic : string option;
+       nsfw : bool;
+       last_message_id : Snowflake.t option;
+       last_pin_timestamp : string option;
+       rate_limit_per_user : int option; [@yojson.option]
+       parent_id : Snowflake.t option;
+     }
+     [@@deriving yojson, show] [@@yojson.allow_extra_fields]
+   end
 
-module V = struct
-  let user_limit t = t.user_limit
+   module V = struct
+     let user_limit t = t.user_limit
 
-  let bitrate t = t.bitrate
+     let bitrate t = t.bitrate
 
-  let rtc_region t = t.rtc_region
-end
+     let rtc_region t = t.rtc_region
+   end
 
-module G = struct end
+   module G = struct end
 
-type t = Snowflake.t * channel
+   type t = Snowflake.t * channel
 
-and channel =
-  | Guild_text
-  | DM
-  | Guild_voice
-  | Group_DM
-  | Guild_category
-  | Guild_news
-  | Guild_store
-  | Guild_stage_voice
+   and channel =
+     | Guild_text
+     | DM
+     | Guild_voice
+     | Group_DM
+     | Guild_category
+     | Guild_news
+     | Guild_store
+     | Guild_stage_voice
 
-let t_of_yojson j =
-  let id = Yojson.Safe.Util.(member "id" j |> Snowflake.t_of_yojson) in
-  let chan =
-    match Yojson.Safe.Util.(member "type" j |> to_int) with
-    | 0 -> Guild_text
-    | 1 -> DM
-    | 2 -> Guild_voice
-    | 3 -> Group_DM
-    | 4 -> Guild_category
-    | 5 -> Guild_news
-    | 6 -> Guild_store
-    | 13 -> Guild_stage_voice
-    | _n -> failwith "unsupported channel type"
-  in
-  (id, chan) *)
+   let t_of_yojson j =
+     let id = Yojson.Safe.Util.(member "id" j |> Snowflake.t_of_yojson) in
+     let chan =
+       match Yojson.Safe.Util.(member "type" j |> to_int) with
+       | 0 -> Guild_text
+       | 1 -> DM
+       | 2 -> Guild_voice
+       | 3 -> Group_DM
+       | 4 -> Guild_category
+       | 5 -> Guild_news
+       | 6 -> Guild_store
+       | 13 -> Guild_stage_voice
+       | _n -> failwith "unsupported channel type"
+     in
+     (id, chan) *)
 
 type t = R.t [@@deriving yojson, show]

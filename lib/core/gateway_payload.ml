@@ -1,7 +1,5 @@
 open! Globals
-
 module L = (val Relog.logger ~namespace:__MODULE__ ())
-
 module Intents = Models.Intents
 
 module Identify = struct

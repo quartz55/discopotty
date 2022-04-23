@@ -25,7 +25,7 @@ module Ws = struct
     Ws_conn.send t.conn pl
 
   let read t = Ws_conn.read t.conn
-  let read_exn t = Ws_conn.read t.conn |> Option.get_exn
+  let read_exn t = Ws_conn.read t.conn |> Option.get_exn_or "empty read"
 
   let close ~code t =
     if not @@ Ws_conn.is_closed t.conn then Ws_conn.close ~code t.conn
@@ -76,7 +76,7 @@ let with_ws_params ?(zlib = false) ~enc ~version uri =
 
 let handshake ~sw ~token ~fwd ?reconn ws =
   let module L =
-    (val Relog.clone (module L) ~fields:F.[ bool "handshaking" true ])
+  (val Relog.clone (module L) ~fields:F.[ bool "handshaking" true ])
   in
   let make_hb interval =
     Heartbeat.make ~sw

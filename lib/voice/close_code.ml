@@ -17,7 +17,6 @@ type discord =
 type t = [ Websocket.Close_code.standard | discord ]
 
 let is_discord = function #discord -> true | _ -> false
-
 let is_std = function #Websocket.Close_code.standard -> true | _ -> false
 
 let to_int = function

@@ -1,5 +1,4 @@
 type t = [ `online | `dnd | `idle | `invisible | `offline ] [@@deriving show]
-
 type unsupported = [ t | `unsupported of string ] [@@deriving show]
 
 let yojson_of_t = function
