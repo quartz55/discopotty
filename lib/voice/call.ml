@@ -30,6 +30,8 @@ and conn_info = Empty | Got_srv of srv_info | Got_sess of sess_info
 
 and events =
   | Req_join of snowflake * unit req
+  | Req_play of Audio_stream.t * unit req
+  | Req_stop of unit req
   | Gw_srv of srv_info
   | Gw_sess of sess_info
   | Gw_dc
@@ -114,6 +116,9 @@ let manage ~net ~dmgr t =
         Gateway.send_voice_state_update t.gw ~channel_id:cid ~self_mute:t.muted
           ~self_deaf:t.deafened t.guild_id;
         main_thread ()
+    | Detached _, (Req_play (_, req) | Req_stop req) ->
+        req (Error Detached);
+        main_thread ()
     | Detached _, (Gw_dc | Gw_sess _ | Gw_srv _) ->
         L.warn (fun m -> m "gateway event on detached call");
         main_thread ()
@@ -144,7 +149,8 @@ let manage ~net ~dmgr t =
           n_req res
         in
         cas ~ev st (Init { init with req }) @@ main_thread
-    | (Init ({ req = o_req; _ } as init) as st), Req_join _ ->
+    | ( (Init ({ req = o_req; _ } as init) as st),
+        (Req_join _ | Req_play _ | Req_stop _) ) ->
         let req res =
           o_req res;
           Eio.Stream.add t.evs ev
@@ -158,6 +164,16 @@ let manage ~net ~dmgr t =
         L.dbg (fun m -> m "join request while live, switching channels");
         Session.disconnect sess;
         handle ev
+    | Live _, Req_play (audio, req) ->
+        let res =
+          Result.guard (fun () -> Mixer.play ~s:(Mixer.stream audio) t.mixer)
+        in
+        req res;
+        main_thread ()
+    | Live _, Req_stop req ->
+        let res = Result.guard (fun () -> Mixer.stop t.mixer) in
+        req res;
+        main_thread ()
     | (Live sess as st), Gw_sess nsess
       when Snowflake.(Session.channel_id sess <> nsess.channel_id)
            || String.(Session.session_id sess <> nsess.session_id) ->
@@ -213,3 +229,13 @@ let join ~channel_id t =
 let leave t =
   Gateway.send_voice_state_update t.gw ~self_mute:t.muted ~self_deaf:t.deafened
     t.guild_id
+
+let play ~audio t =
+  let p, u = Promise.create () in
+  Eio.Stream.add t.evs @@ Req_play (audio, Promise.resolve u);
+  Promise.await_exn p
+
+let stop t =
+  let p, u = Promise.create () in
+  Eio.Stream.add t.evs @@ Req_stop (Promise.resolve u);
+  Promise.await_exn p

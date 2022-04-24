@@ -1,4 +1,5 @@
 open Containers
+open Eio.Std
 module D = Disco
 module Voice = Disco_voice
 module Client = D.Client.Make (Voice.Manager)
@@ -35,6 +36,7 @@ let handler cfg client =
   let prefix = Config.prefix cfg in
   Sys.set_signal Sys.sigint
     (Sys.Signal_handle (fun _ -> Client.disconnect client));
+  let voice = Client.voice client in
   function
   | Disco_core.Events.Message_create
       { content; channel_id; guild_id = Some guild_id; _ } -> (
@@ -66,9 +68,7 @@ let handler cfg client =
           in
           Client.send_message channel_id msg client
       | Some ("join", vchan) -> (
-          let guild_id = guild_id in
           let vchan = M.Snowflake.of_string vchan in
-          let voice = Client.voice client in
           let call = Voice.Manager.get ~guild_id voice in
           try Voice.Call.join call ~channel_id:vchan
           with exn ->
@@ -78,10 +78,14 @@ let handler cfg client =
             in
             Client.send_message channel_id msg client)
       | Some ("leave", _) ->
-          let guild_id = guild_id in
-          let voice = Client.voice client in
           let call = Voice.Manager.get ~guild_id voice in
           Voice.Call.leave call
+      | Some ("soundtest", "kiff") ->
+          let call = Voice.Manager.get ~guild_id voice in
+          Switch.run @@ fun sw ->
+          let path = String.concat "/" [ Sys.getcwd (); "kiff.mp3" ] in
+          let audio = Voice.Ffmpeg.process ~sw (`File path) in
+          Voice.Call.play ~audio call
       (* | Some ("join", v_channel_id) ->
              let guild_id = Option.get_exn guild_id in
              let channel_id = M.Snowflake.of_string v_channel_id in

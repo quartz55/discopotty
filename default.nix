@@ -37,4 +37,10 @@ buildDunePackage {
     yojson
     relog
   ];
+
+  checkInputs = [
+    alcotest
+    qcheck
+    qcheck-alcotest
+  ];
 }

@@ -4,18 +4,21 @@ module Lf_queue = Eio_utils.Lf_queue
 
 exception Destroyed
 
-let spin_sleep ?(acc = 100_000L) dur =
-  let b = Backoff.create () in
+let spin_sleep ?(acc = 1_000_000L) dur =
   let elapsed =
     let start = Mtime_clock.now () in
     fun () -> Mtime.span start (Mtime_clock.now ()) |> Mtime.Span.to_uint64_ns
   in
   (if Int64.(dur > acc) then
    let init_s = Int64.(to_float (dur - acc)) /. 1e9 in
-   Unix.sleepf init_s);
+   Eio_unix.sleep init_s);
   while Int64.(elapsed () < dur) do
-    Backoff.once b
-  done
+    for _ = 1 to 4096 do
+      Domain.cpu_relax ()
+    done
+  done;
+  let ms = Int64.(to_float @@ elapsed ()) /. 1e6 in
+  L.trace (fun m -> m "spin_sleep elapsed: %fms" ms)
 
 type t = {
   reqs : req Lf_queue.t;
@@ -33,6 +36,10 @@ and req =
 and 'a res = ('a, exn) result -> unit
 and state = Idle | Playing of stream
 and stream = { waker : bool -> unit; rx : Audio_stream.t }
+
+let stream ?waker rx =
+  let waker = Option.get_or ~default:(fun _ -> Audio_stream.close rx) waker in
+  { waker; rx }
 
 let make_silence ?n () = Audio_stream.silence_frames ?n ()
 
@@ -98,10 +105,10 @@ let run ~play ~stop t =
     Audio_stream.read src |> function
     | Some frame ->
         let i = i + 1 in
-        if play (i + 1) frame then exhaust ~i src else `Yield i
+        if play i frame then exhaust ~i src else `Yield i
     | None -> `Closed i
   in
-  let framelen = Int64.(of_int Rtp._FRAME_LEN * 100_000L) in
+  let framelen = Int64.(of_int Rtp._FRAME_LEN * 1_000_000L) in
   let schedule_next ?drift ?(frames = 1) () =
     let timeout = Int64.(of_int frames * framelen) in
     let with_drift d =
@@ -112,8 +119,8 @@ let run ~play ~stop t =
       Option.map with_drift drift |> Option.get_or ~default:timeout
     in
     L.trace (fun m ->
-        m "sent %d frames, next tick in %Ld ns (%f s)" frames timeout
-          (Int64.to_float timeout /. 1e9));
+        m "sent %d frames, next tick in %Ld ns (%f ms)" frames timeout
+          (Int64.to_float timeout /. 1e6));
     spin_sleep timeout
   in
   let rec loop ?(drift = now ()) ?(i = 0) () =

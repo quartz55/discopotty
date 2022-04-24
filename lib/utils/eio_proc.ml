@@ -60,6 +60,7 @@ let rec waitpid_non_intr pid =
   try snd @@ Unix.waitpid [] pid
   with Unix.Unix_error (EINTR, _, _) -> waitpid_non_intr pid
 
+let pid { pid; _ } = pid
 let stdout { stdout; _ } = stdout
 let stdin { stdin; _ } = stdin
 let stderr { stderr; _ } = stderr
@@ -92,11 +93,14 @@ let close t =
       wait_set_status t
   | Some s -> s
 
-let spawn ~sw prog =
+let spawn ~sw ?(args = []) prog =
   let stdout_r, stdout_w = pipe ~sw () in
   let stdin_r, stdin_w = pipe ~sw () in
   let stderr_r, stderr_w = pipe ~sw () in
-  let pid = Unix.create_process_env prog [||] [||] stdin_r stdout_w stderr_w in
+  let pid =
+    Unix.create_process_env prog (Array.of_list args) [||] stdin_r stdout_w
+      stderr_w
+  in
   [ stdout_w; stdin_r; stderr_w ] |> List.iter Unix.close;
   let stdout = wrap_in stdout_r in
   let stdin = wrap_out stdin_w in

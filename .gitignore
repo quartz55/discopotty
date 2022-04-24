@@ -37,3 +37,7 @@ discopotty.toml
 *.ctf
 # nix artifacts
 result
+
+# pijul
+.ignore
+.pijul

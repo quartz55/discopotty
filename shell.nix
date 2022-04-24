@@ -23,6 +23,11 @@ in
     ocamlPackages.utop
     ffmpeg
     youtube-dl
+  ] ++ lib.optionals stdenv.isDarwin [ fswatch ];
+  propagatedBuildInputs = with pkgs.ocamlPackages; [
+    alcotest
+    qcheck
+    qcheck-alcotest
   ];
 }).overrideAttrs (o: {
   propagatedBuildInputs = filterDrvs o.propagatedBuildInputs;
