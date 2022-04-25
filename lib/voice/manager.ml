@@ -12,7 +12,7 @@ type t = {
   mutable calls : Call.t Sf_map.t;
   spawn : snowflake -> Call.t;
   poison : unit -> unit;
-  mutable dead : bool;
+  dead : unit Promise.t * unit Promise.u;
 }
 
 let user_id { gw; _ } =
@@ -42,7 +42,6 @@ let make ~env ~sw gw =
   let net = Eio.Stdenv.net env in
   let dmgr = Eio.Stdenv.domain_mgr env in
   let evs = Eio.Stream.create 0 in
-  let poison () = Eio.Stream.add evs `Poison in
   let rec t =
     {
       mtx = Eio_mutex.make ();
@@ -50,27 +49,36 @@ let make ~env ~sw gw =
       gw;
       spawn;
       poison;
-      dead = false;
+      dead = Promise.create ();
     }
+  and poison () =
+    Eio.Stream.add evs `Poison;
+    Promise.await (fst t.dead)
   and spawn guild_id =
     let p, u = Promise.create () in
     Eio.Stream.add evs @@ `Spawn (guild_id, Promise.resolve u);
     Promise.await_exn p
   in
-  Gateway.sub gw ~fn:(function
-    | E.Voice_server_update v -> server_update t v
-    | Voice_state_update v -> state_update t v
-    | _ -> ());
+  let unsub =
+    Gateway.sub gw ~fn:(function
+      | E.Voice_server_update v -> server_update t v
+      | Voice_state_update v -> state_update t v
+      | _ -> ())
+  in
+  Switch.on_release sw unsub;
   let run () =
     Switch.run @@ fun sw ->
     let rec loop () =
       match Eio.Stream.take evs with
       | `Poison ->
-          Eio_mutex.with_ t.mtx @@ fun () ->
-          Sf_map.to_seq t.calls
-          |> Seq.map (fun (_, call) () -> Call.leave call)
-          |> Seq.to_list |> Fiber.all;
-          t.calls <- Sf_map.empty
+          let w =
+            Sf_map.to_seq t.calls
+            |> Seq.map (fun (_, call) () -> Call.leave call)
+            |> Seq.to_list
+          in
+          Fiber.all w;
+          t.calls <- Sf_map.empty;
+          Promise.resolve (snd t.dead) ()
       | `Spawn (guild_id, req) ->
           Eio_mutex.with_ t.mtx (fun () ->
               match Sf_map.get guild_id t.calls with
@@ -92,10 +100,7 @@ let make ~env ~sw gw =
   Fiber.fork ~sw (fun () -> try run () with Exit -> ());
   t
 
-let destroy t =
-  if not @@ t.dead then (
-    t.dead <- true;
-    t.poison ())
+let destroy t = if not @@ Promise.is_resolved (fst t.dead) then t.poison ()
 
 let get t ~guild_id =
   Eio_mutex.lock t.mtx;

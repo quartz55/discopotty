@@ -34,8 +34,20 @@ let setup_logging () =
 
 let handler cfg client =
   let prefix = Config.prefix cfg in
-  Sys.set_signal Sys.sigint
-    (Sys.Signal_handle (fun _ -> Client.disconnect client));
+  (* FIXME do we need eio specific support? (luv in this case) *)
+  (* let intr = Atomic.make false in
+     Sys.set_signal Sys.sigint
+       (Sys.Signal_handle
+          (fun _ ->
+            if Atomic.get intr then (
+              L.warn (fun m ->
+                  m
+                    "forcing shutdown (you might see exceptions related to the \
+                     ongoing cleanup)");
+              exit (-1))
+            else if Atomic.compare_and_set intr false true then (
+              L.info (fun m -> m "received SIGINT, gracefully shutting down");
+              Client.disconnect client))); *)
   let voice = Client.voice client in
   function
   | Disco_core.Events.Message_create
@@ -151,5 +163,5 @@ let main env =
     exit (-1)
 
 let () =
-  Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () ->
+  (* Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () -> *)
   Eio_luv.run (fun env -> main (env :> Eio.Stdenv.t))

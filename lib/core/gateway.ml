@@ -4,34 +4,86 @@ module Payload = Gateway_payload
 module Token_bucket = Lf_token_bucket
 
 module Subs = struct
-  type t = { mtx : Eio_mutex.t; mutable st : state }
+  type t = { state : state Atomic.t; gc : int Atomic.t }
 
   and state =
     | Waiting of (unit Promise.t * unit Promise.u)
-    | Serving of sub list
+    | Serving of sub Atomic.t list
+    | Gcing of (unit Promise.t * unit Promise.u)
 
-  and sub = Events.t -> unit
+  and sub = Active of (Events.t -> unit) | Inactive
 
-  let make () = { mtx = Eio_mutex.make (); st = Waiting (Promise.create ()) }
+  let make () =
+    { state = Atomic.make @@ Waiting (Promise.create ()); gc = Atomic.make 0 }
 
   let sub ~fn t =
-    Eio_mutex.with_ t.mtx @@ fun () ->
-    match t.st with
-    | Waiting (_, u) ->
-        t.st <- Serving [ fn ];
-        Promise.resolve u ()
-    | Serving s -> t.st <- Serving (fn :: s)
+    let sub = Atomic.make @@ Active fn in
+    let unsub () =
+      let b = Backoff.create () in
+      let rec loop () =
+        match Atomic.get sub with
+        | Active _ as st when Atomic.compare_and_set sub st Inactive ->
+            Atomic.incr t.gc
+        | Active _ ->
+            Backoff.once b;
+            loop ()
+        | Inactive -> ()
+      in
+      loop ()
+    in
+    let b = Backoff.create () in
+    let rec loop () =
+      match Atomic.get t.state with
+      | Waiting (_, u) as st
+        when Atomic.compare_and_set t.state st (Serving [ sub ]) ->
+          Promise.resolve u ();
+          unsub
+      | Serving s as st when Atomic.get t.gc >= 5 ->
+          let p, u = Promise.create () in
+          if Atomic.compare_and_set t.state st (Gcing (p, u)) then (
+            let gced = ref 0 in
+            let s =
+              List.filter
+                (fun s ->
+                  match Atomic.get s with
+                  | Active _ -> true
+                  | Inactive ->
+                      incr gced;
+                      Atomic.decr t.gc;
+                      false)
+                s
+            in
+            L.dbg (fun m -> m "gced %d inactive subs" !gced);
+            Atomic.set t.state (Serving (sub :: s));
+            Promise.resolve u ();
+            unsub)
+          else (
+            Backoff.once b;
+            loop ())
+      | Serving s as st
+        when Atomic.compare_and_set t.state st (Serving (sub :: s)) ->
+          unsub
+      | Gcing (p, _) ->
+          Promise.await p;
+          loop ()
+      | Waiting _ | Serving _ ->
+          Backoff.once b;
+          loop ()
+    in
+    loop ()
 
   let rec pub ~sw t v =
-    Eio_mutex.lock t.mtx;
-    match t.st with
-    | Waiting (p, _) ->
-        Eio_mutex.unlock t.mtx;
+    match Atomic.get t.state with
+    | Waiting (p, _) | Gcing (p, _) ->
         Promise.await p;
         pub ~sw t v
     | Serving s ->
-        List.iter (fun fn -> Fiber.fork ~sw (fun () -> fn v)) s;
-        Eio_mutex.unlock t.mtx
+        List.iter
+          (fun s ->
+            match Atomic.get s with
+            | Active fn -> Fiber.fork ~sw (fun () -> fn v)
+            | Inactive -> ())
+          s
 end
 
 type t = {

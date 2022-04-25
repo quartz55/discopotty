@@ -58,7 +58,8 @@ module Make (Voice : Voice_manager_intf) = struct
     let t = { http; gw; cache; voice } in
     L.info (fun m -> m "starting main event loop");
     let fn = handler t in
-    Gateway.sub ~fn gw
+    let _unsub = Gateway.sub ~fn gw in
+    ()
 end
 
 module Nop_voice = struct
