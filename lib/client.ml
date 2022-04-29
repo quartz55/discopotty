@@ -57,7 +57,23 @@ module Make (Voice : Voice_manager_intf) = struct
     let voice = Voice.make ~env ~sw gw in
     let t = { http; gw; cache; voice } in
     L.info (fun m -> m "starting main event loop");
-    let fn = handler t in
+    let fn =
+      let h = handler t in
+      fun ev ->
+        try h ev
+        with e -> (
+          match ev with
+          | Events.Message_create { channel_id; _ } ->
+              let msg =
+                Models.Message.fmt "unhandled client handler exception: %s"
+                  (Printexc.to_string e)
+              in
+              send_message channel_id msg t
+          | _ ->
+              L.warn (fun m ->
+                  m "unhandled client handler exception: %s"
+                    (Printexc.to_string e)))
+    in
     let _unsub = Gateway.sub ~fn gw in
     ()
 end

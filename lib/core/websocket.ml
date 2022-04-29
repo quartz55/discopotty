@@ -137,6 +137,7 @@ functor
     type t = {
       info : conn_info;
       wsd : Websocketaf.Wsd.t;
+      conn : Ws_client.t;
       stream : frame Eio.Stream.t;
     }
 
@@ -168,7 +169,10 @@ functor
       send' 0
 
     let close ?code t =
-      if not @@ is_closed t then Websocketaf.Wsd.close ?code t.wsd
+      if not @@ is_closed t then (
+        Websocketaf.Wsd.close ?code t.wsd;
+        Fiber.yield ();
+        Ws_client.shutdown t.conn)
 
     let rec _connect ~sw ~net ~enc ~zlib ~tls host port resource =
       L.info (fun m -> m "opening socket (%s:%d) tls=%b" host port tls);
@@ -208,18 +212,20 @@ functor
            maybe an unbounded stream would make more sense
            given ws/af is push-based *)
         let stream = Eio.Stream.create max_int in
-        Promise.resolve_ok u (`Conn { info = conn_info; wsd; stream });
-        let do_read ~on_done payload =
+        Promise.resolve_ok u (`Conn (conn_info, wsd, stream));
+        let read payload =
+          let p, u = Promise.create () in
           let buf = Faraday.create 1024 in
           let on_eof () =
             let out = Faraday.serialize_to_bigstring buf in
-            on_done out
+            Promise.resolve u out
           in
           let rec on_read bs ~off ~len =
             Faraday.schedule_bigstring buf bs ~off ~len;
             Ws_payload.schedule_read payload ~on_read ~on_eof
           in
-          Ws_payload.schedule_read payload ~on_read ~on_eof
+          Ws_payload.schedule_read payload ~on_read ~on_eof;
+          Promise.await p
         in
         let frame ~opcode ~is_fin ~len payload =
           Fiber.fork ~sw @@ fun () ->
@@ -238,40 +244,40 @@ functor
               Eio.Stream.add stream (Close `Going_away);
               Websocketaf.Wsd.close wsd
           | `Connection_close ->
-              let on_done frame =
-                let close_code =
-                  Bigstringaf.get_int16_be frame 0 |> Close_code.of_int_exn
-                in
-                L.warn (fun m ->
-                    m "got close frame with code=%a" Close_code.pp close_code);
-                Eio.Stream.add stream (Close close_code);
-                Websocketaf.Wsd.close wsd
+              let frame = read payload in
+              let close_code =
+                Bigstringaf.get_int16_be frame 0 |> Close_code.of_int_exn
               in
-              do_read payload ~on_done
+              L.warn (fun m ->
+                  m "got close frame with code=%a" Close_code.pp close_code);
+              Eio.Stream.add stream (Close close_code);
+              Websocketaf.Wsd.close wsd
           | `Binary | `Text ->
               (* TODO zlib transport compression *)
-              let on_done frame =
-                let pl_json =
-                  try Bigstringaf.to_string frame |> Yojson.Safe.from_string
-                  with exn ->
-                    L.err (fun m ->
-                        m "invalid json payload"
-                          ~fields:F.[ str "exn" (Printexc.to_string exn) ]);
-                    raise exn
-                in
-                L.debug (fun m ->
-                    m "got websocket payload:@.%s"
-                      (pl_json |> Yojson.Safe.pretty_to_string));
-                match P.of_json pl_json with
-                | (exception
-                    Ppx_yojson_conv_lib__Yojson_conv.Of_yojson_error (exn, _))
-                | (exception exn) ->
-                    L.warn (fun m ->
-                        m "couldn't parse payload, ignoring..."
-                          ~fields:F.[ str "exn" (Printexc.to_string exn) ])
-                | pl -> Eio.Stream.add stream (Payload pl)
+              let frame = read payload in
+              let pl_json =
+                try Bigstringaf.to_string frame |> Yojson.Safe.from_string
+                with exn ->
+                  L.err (fun m ->
+                      m "invalid json payload"
+                        ~fields:F.[ str "exn" (Printexc.to_string exn) ]);
+                  raise exn
               in
-              do_read payload ~on_done
+              L.debug (fun m ->
+                  m "got websocket payload:@.%s"
+                    (pl_json |> Yojson.Safe.pretty_to_string));
+              let pl =
+                try Some (P.of_json pl_json)
+                with
+                | Ppx_yojson_conv_lib__Yojson_conv.Of_yojson_error (exn, _)
+                | exn
+                ->
+                  L.warn (fun m ->
+                      m "couldn't parse payload, ignoring..."
+                        ~fields:F.[ str "exn" (Printexc.to_string exn) ]);
+                  None
+              in
+              Option.iter (fun pl -> Eio.Stream.add stream (Payload pl)) pl
           | `Continuation ->
               L.err (fun m -> m "continuation frame unsupported");
               exit (-1)
@@ -293,9 +299,7 @@ functor
           ~websocket_handler
       in
       match Promise.await_exn p with
-      | `Conn t ->
-          Switch.on_release sw (fun () -> Ws_client.shutdown conn);
-          t
+      | `Conn (info, wsd, stream) -> { info; wsd; conn; stream }
       | `Redir loc ->
           let host, port, tls, resource = _uri_info (Uri.of_string loc) in
           _connect ~sw ~net ~enc ~zlib ~tls host port resource

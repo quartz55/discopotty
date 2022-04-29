@@ -81,7 +81,13 @@ module Subs = struct
         List.iter
           (fun s ->
             match Atomic.get s with
-            | Active fn -> Fiber.fork ~sw (fun () -> fn v)
+            | Active fn ->
+                Fiber.fork_sub ~sw
+                  ~on_error:(fun e ->
+                    L.warn (fun m ->
+                        m "unhandled subscriber exception: %s"
+                          (Printexc.to_string e)))
+                  (fun _ -> fn v)
             | Inactive -> ())
           s
 end

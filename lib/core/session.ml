@@ -271,7 +271,6 @@ let manage ~sw ~net t =
                Websocket.Close_code.pp code))
     | `Op (Dc k) ->
         Ws.close ~code:`Normal_closure ws;
-        Fiber.yield ();
         k ()
   and handle_payload ~hb ~info = function
     | Hello new_hb ->

@@ -15,6 +15,7 @@
   tls
   httpaf
   eio
+  eio_luv
   eio.unix
   angstrom
   yojson

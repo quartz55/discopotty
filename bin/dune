@@ -11,4 +11,11 @@
  (public_name eio_notebook.exe)
  (modules eio_notebook)
  (package discopotty)
- (libraries disco.utils bigstringaf containers eio eio_luv eio.unix))
+ (libraries
+  disco.core
+  disco.utils
+  bigstringaf
+  containers
+  eio
+  eio_luv
+  eio.unix))

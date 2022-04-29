@@ -22,6 +22,29 @@ let setup_logging () =
   let cli_fmter = Formatter.default ~color:true ~oneline:false () in
   let cli_fmt = Format.formatter_of_out_channel stderr in
   let mtx = Mutex.create () in
+  Logs.set_level ~all:true @@ Some Logs.Debug;
+  let report src lvl ~over k msgf =
+    let namespace = Logs.Src.name src in
+    let module L = (val Relog.logger ~namespace ()) in
+    let log =
+      match lvl with
+      | Logs.Error -> L.err
+      | Warning -> L.warn
+      | App | Info -> L.info
+      | Debug -> L.trace
+    in
+    let b = Buffer.create 80 in
+    let k _ =
+      log (fun m -> m "%s" (Buffer.to_bytes b |> Bytes.unsafe_to_string));
+      over ();
+      k ()
+    in
+    msgf @@ fun ?header:_ ?tags:_ fmt ->
+    let ppf = Format.formatter_of_buffer b in
+    Format.kfprintf k ppf fmt
+  in
+  let relog_logs_adapter = { Logs.report } in
+  Logs.set_reporter relog_logs_adapter;
   let handler r =
     if Level.Infix.(Record.level r <= verbosity) then (
       Mutex.lock mtx;
@@ -98,53 +121,6 @@ let handler cfg client =
           let path = String.concat "/" [ Sys.getcwd (); "kiff.mp3" ] in
           let audio = Voice.Ffmpeg.process ~sw (`File path) in
           Voice.Call.play ~audio call
-      (* | Some ("join", v_channel_id) ->
-             let guild_id = Option.get_exn guild_id in
-             let channel_id = M.Snowflake.of_string v_channel_id in
-             let voice = Client.voice client in
-             Voice.Manager.join ~guild_id ~channel_id voice
-         | Some ("play", "soundbite") -> (
-             let guild_id = Option.get_exn guild_id in
-             let* s = Voice.Audio_stream.Ffmpeg.create @@ `File "./bite2.mp3" in
-             match s with
-             | Ok audio_stream ->
-                 Client.play_audio_stream ~guild_id audio_stream client
-             | _ -> Lwt.return_unit)
-         | Some ("play", "kiff") -> (
-             let guild_id = Option.get_exn guild_id in
-             let* s = Voice.Audio_stream.Ffmpeg.create @@ `File "./kiff.mp3" in
-             match s with
-             | Ok audio_stream ->
-                 Client.play_audio_stream ~guild_id audio_stream client
-             | _ -> Lwt.return_unit)
-         | Some ("play", query) -> (
-             let guild_id = Option.get_exn guild_id in
-             let* tracks = Ytdl.get ytdl query in
-             match tracks with
-             | Ok [] | Error _ ->
-                 let msg = Msg.fmt "⚠️ No track found for query: '%s'" query in
-                 Client.send_message channel_id msg client
-             | Ok ((track, i) :: _) -> (
-                 let* s = Voice.Audio_stream.Ffmpeg.create i in
-                 match s with
-                 | Ok audio_stream ->
-                     let* () =
-                       Client.play_audio_stream ~guild_id audio_stream client
-                     in
-                     let thumb fmt = function
-                       | Some t -> Format.fprintf fmt "\n%s" t
-                       | None -> ()
-                     in
-                     let msg =
-                       Msg.fmt "🎵 @{<b>Now playing:@} '%s'%a" track.title thumb
-                         track.thumbnail
-                     in
-                     Client.send_message channel_id msg client
-                 | Error e ->
-                     client
-                     |> Client.send_message channel_id
-                          (Msg.fmt "⚠️ Couldn't play track: '%s'\nReason: %a"
-                             track.title Error.pp e))) *)
       | Some (other, _) ->
           let msg = Msg.fmt "🛑 @{<b>unsupported command@} @{<code>%s@}" other in
           Client.send_message channel_id msg client)
@@ -163,5 +139,5 @@ let main env =
     exit (-1)
 
 let () =
-  (* Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () -> *)
+  Eio_unix.Ctf.with_tracing "discopotty.ctf" @@ fun () ->
   Eio_luv.run (fun env -> main (env :> Eio.Stdenv.t))

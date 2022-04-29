@@ -1,6 +1,9 @@
-{ lib, stdenv, ocamlPackages, ocaml }:
+{ lib, stdenv, ocamlPackages, ocaml, static ? false }:
 
-stdenv.mkDerivation {
+let
+  profile = if static then "static" else "release";
+in
+stdenv.mkDerivation rec {
   pname = "discopotty";
   version = "0.0.1";
 
@@ -24,7 +27,7 @@ stdenv.mkDerivation {
   ];
 
   buildPhase = ''
-    dune build bin/bot/discopotty.exe --display=short --profile=release
+    dune build bin/bot/discopotty.exe -p ${pname} --display=short --profile=${profile}
   '';
   installPhase = ''
     mkdir -p $out/bin

@@ -1,7 +1,9 @@
 (tests
- (names token_bucket audio_stream)
+ (names token_bucket audio_stream http_server)
  (package disco)
  (libraries
+  eio
+  eio_luv
   disco
   relog.lib
   alcotest

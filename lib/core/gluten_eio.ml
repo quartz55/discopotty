@@ -18,6 +18,30 @@ module type IO = sig
   val close : socket -> unit
 end
 
+module type Server = sig
+  type socket
+  type addr
+
+  val create_upgradable_connection_handler :
+    read_buffer_size:int ->
+    protocol:'t Gluten.runtime ->
+    create_protocol:(('reqd -> unit) -> 't) ->
+    request_handler:(addr -> 'reqd Gluten.Server.request_handler) ->
+    sw:Switch.t ->
+    addr ->
+    socket ->
+    unit
+
+  val create_connection_handler :
+    read_buffer_size:int ->
+    protocol:'t Gluten.runtime ->
+    't ->
+    sw:Switch.t ->
+    addr ->
+    socket ->
+    unit
+end
+
 module type Client = sig
   type t
   type socket
@@ -44,7 +68,8 @@ module Buffer = struct
     let queue, _ = Qe.create ~capacity Bigarray.char in
     queue
 
-  let get t ~f =
+  let get t f =
+    Qe.compress t;
     match Qe.N.peek t with
     | [] -> f Bigstringaf.empty ~off:0 ~len:0
     | [ slice ] ->
@@ -60,7 +85,7 @@ module Buffer = struct
   let blit _src _off _dst _dst_off _len = ()
   let linger t = Qe.length t
 
-  let put t ~f =
+  let put t f =
     Qe.compress t;
     let buffer = Qe.unsafe_bigarray t in
     match f buffer ~off:(Qe.length t) ~len:(Qe.available t) with
@@ -93,14 +118,14 @@ module IO_loop = struct
             | Some r ->
                 Fiber.yield ();
                 r
-            | None -> Buffer.put ~f:(Io.read socket) read_buffer
+            | None -> Buffer.put read_buffer (Io.read socket)
           in
           match res with
           | `Eof ->
               L.trace (fun m -> m "read_loop: read EOF");
               let n =
-                Buffer.get read_buffer ~f:(fun bigstring ~off ~len ->
-                    Runtime.read_eof t bigstring ~off ~len)
+                Buffer.get read_buffer @@ fun bigstring ~off ~len ->
+                Runtime.read_eof t bigstring ~off ~len
               in
               L.trace (fun m -> m "read_loop: runtime read EOF %d" n);
               let linger =
@@ -111,9 +136,9 @@ module IO_loop = struct
           | `Ok n ->
               L.trace (fun m -> m "read_loop: read %d" n);
               let n2 =
-                Buffer.get read_buffer ~f:(fun bigstring ~off ~len ->
-                    L.trace (fun m -> m "read_loop: buffer get %d" len);
-                    Runtime.read t bigstring ~off ~len)
+                Buffer.get read_buffer @@ fun bigstring ~off ~len ->
+                L.trace (fun m -> m "read_loop: buffer get %d" len);
+                Runtime.read t bigstring ~off ~len
               in
               L.trace (fun m -> m "read_loop: runtime read %d" n2);
               let l = Buffer.linger read_buffer in
@@ -146,27 +171,54 @@ module IO_loop = struct
           Io.shutdown_send socket
     in
     let run () =
-      Fiber.first
+      Fiber.both
         (fun () ->
           try read_loop () with
           | Eio.Cancel.Cancelled _ as e -> raise e
           | exn ->
               L.warn (fun m -> m "error reading: %a" Fmt.exn exn);
-              Runtime.report_exn t exn;
-              raise exn)
+              Runtime.report_exn t exn)
         (fun () ->
           try write_loop () with
           | Eio.Cancel.Cancelled _ as e -> raise e
           | exn ->
               L.warn (fun m -> m "error writing: %a" Fmt.exn exn);
-              Runtime.report_exn t exn;
-              raise exn)
+              Runtime.report_exn t exn)
     in
     Fun.protect
       ~finally:(fun () ->
         L.trace (fun m -> m "io_loop: done");
         Io.close socket)
       run
+end
+
+module MakeServer (Io : IO) :
+  Server with type socket = Io.socket and type addr = Io.addr = struct
+  module Server = Gluten.Server
+
+  type socket = Io.socket
+  type addr = Io.addr
+
+  let create_connection_handler ~read_buffer_size ~protocol connection ~sw
+      _client_addr socket =
+    let connection = Server.create ~protocol connection in
+    Switch.on_release sw (fun () -> Server.shutdown connection);
+    IO_loop.start
+      (module Io)
+      (module Server)
+      connection ~read_buffer_size socket
+
+  let create_upgradable_connection_handler ~read_buffer_size ~protocol
+      ~create_protocol ~request_handler ~sw client_addr socket =
+    let connection =
+      Server.create_upgradable ~protocol ~create:create_protocol
+        (request_handler client_addr)
+    in
+    Switch.on_release sw (fun () -> Server.shutdown connection);
+    IO_loop.start
+      (module Io)
+      (module Server)
+      connection ~read_buffer_size socket
 end
 
 module MakeClient (Io : IO) : Client with type socket = Io.socket = struct
@@ -196,9 +248,10 @@ module MakeClient (Io : IO) : Client with type socket = Io.socket = struct
 end
 
 module Eio_io :
-  IO with type socket = eio_socket and type addr = Eio.Net.Sockaddr.t = struct
+  IO with type socket = eio_socket and type addr = Eio.Net.Sockaddr.stream =
+struct
   type socket = eio_socket
-  type addr = Eio.Net.Sockaddr.t
+  type addr = Eio.Net.Sockaddr.stream
 
   let read socket bigstring ~off ~len =
     L.trace (fun m -> m "reading up to %dB from eio socket" (len - off));
@@ -226,11 +279,17 @@ module Eio_io :
       in
       L.trace (fun m -> m "wrote %dB to eio socket" n);
       `Ok n
-    with Unix.Unix_error (Unix.EPIPE, _, _) -> `Closed
+    with
+    | Unix.Unix_error (Unix.EPIPE, _, _) | Eio_luv.Low_level.Luv_error `EPIPE ->
+      `Closed
 
   let shutdown socket cmd =
     try Eio.Flow.shutdown socket cmd
-    with Unix.Unix_error (Unix.ENOTCONN, _, _) -> ()
+    with
+    | Unix.Unix_error (Unix.ENOTCONN, _, _)
+    | Eio_luv.Low_level.Luv_error `ENOTCONN
+    ->
+      ()
 
   let shutdown_send socket =
     L.trace (fun m -> m "shutdown_send eio socket");
@@ -238,7 +297,7 @@ module Eio_io :
 
   let shutdown_receive socket =
     L.trace (fun m -> m "shutdown_receive eio socket");
-    shutdown socket `Receive
+    try shutdown socket `Receive with Failure _ -> ()
 
   let close socket =
     L.trace (fun m -> m "closing eio socket");
@@ -246,3 +305,4 @@ module Eio_io :
 end
 
 module Client = MakeClient (Eio_io)
+module Server = MakeServer (Eio_io)

@@ -1,3 +1,18 @@
+module Server (Server_runtime : Gluten_eio.Server) = struct
+  type socket = Server_runtime.socket
+
+  let create_connection_handler ?(config = Httpaf.Config.default)
+      ~request_handler ~error_handler ~sw client_addr socket =
+    let create_connection =
+      Httpaf.Server_connection.create ~config
+        ~error_handler:(error_handler client_addr)
+    in
+    Server_runtime.create_upgradable_connection_handler
+      ~read_buffer_size:config.read_buffer_size
+      ~protocol:(module Httpaf.Server_connection)
+      ~create_protocol:create_connection ~request_handler ~sw client_addr socket
+end
+
 module Client (Client_runtime : Gluten_eio.Client) = struct
   type socket = Client_runtime.socket
   type runtime = Client_runtime.t

@@ -12,6 +12,9 @@ let
           (name: name == drv.pname || name == drv.name)
           (lib.attrNames discoDrvs)))
       inputs;
+  mirage-trace-viewer-gtk = pkgs.callPackage ./nix/mirage-trace-viewer-gtk.nix {
+    ocamlPackages = pkgs.ocaml-ng.ocamlPackages_4_12;
+  };
 in
 (pkgs.mkShell {
   OCAMLRUNPARAM = "b";
@@ -23,6 +26,7 @@ in
     ocamlPackages.utop
     ffmpeg
     youtube-dl
+    mirage-trace-viewer-gtk
   ] ++ lib.optionals stdenv.isDarwin [ fswatch ];
   propagatedBuildInputs = with pkgs.ocamlPackages; [
     alcotest

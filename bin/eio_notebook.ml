@@ -1,35 +1,87 @@
-module Eio_proc = Disco_utils.Eio_proc
+module Ws_client =
+  Disco_core.Websocketaf_eio.Client (Disco_core.Gluten_eio.Client)
 
-let read_str flow =
-  let out = Buffer.create 1024 in
-  let buf = Cstruct.create_unsafe 1024 in
-  let rec read () =
-    match Eio.Flow.read flow buf with
-    | (exception End_of_file) | 0 ->
-        Buffer.to_bytes out |> Bytes.unsafe_to_string
-    | n ->
-        Buffer.add_bytes out (Cstruct.to_bytes ~len:n buf);
-        read ()
+module Ws_payload = Websocketaf.Payload
+open Eio.Std
+
+let websocket_handler ~sw ~stdin u wsd =
+  let read_line =
+    let r = Eio.Buf_read.of_flow ~max_size:4096 stdin in
+    fun () -> Eio.Buf_read.line r
   in
-  read ()
+  let rec input_loop wsd () =
+    let line = read_line () in
+    let payload = Bytes.of_string line in
+    Websocketaf.Wsd.send_bytes wsd ~kind:`Text payload ~off:0
+      ~len:(Bytes.length payload);
+    if line = "exit" then Websocketaf.Wsd.close wsd else input_loop wsd ()
+  in
+  let read payload =
+    let p, u = Promise.create () in
+    let buf = Faraday.create 1024 in
+    let on_eof () =
+      let out = Faraday.serialize_to_bigstring buf in
+      Promise.resolve u out
+    in
+    let rec on_read bs ~off ~len =
+      Faraday.schedule_bigstring buf bs ~off ~len;
+      Ws_payload.schedule_read payload ~on_read ~on_eof
+    in
+    Ws_payload.schedule_read payload ~on_read ~on_eof;
+    Promise.await p
+  in
+  Fiber.fork ~sw (input_loop wsd);
+  let frame ~opcode:_ ~is_fin:_ ~len:_ payload =
+    Fiber.fork ~sw @@ fun () ->
+    let b = read payload in
+    Format.printf "%s@." (Bigstringaf.to_string b)
+  in
+  let eof () =
+    Printf.eprintf "[EOF]\n%!";
+    Promise.resolve u ()
+  in
+  { Websocketaf.Client_connection.frame; eof }
 
-let worker n =
-  Eio.Switch.run @@ fun sw ->
-  let str = Format.sprintf "worker %d" n in
-  let proc = Eio_proc.spawn ~sw "cat" in
-  Eio.Flow.copy_string str (Eio_proc.stdin proc);
-  Eio.Flow.close (Eio_proc.stdin proc);
-  let logs = read_str (Eio_proc.stderr proc) in
-  Eio.traceln "logs: %s" logs;
-  let str_out = read_str (Eio_proc.stdout proc) in
-  Eio.traceln "%s vs %s" str str_out;
-  assert (String.equal str str_out)
+let error_handler = function
+  | `Handshake_failure (rsp, _body) ->
+      Format.eprintf "Handshake failure: %a\n%!" Httpaf.Response.pp_hum rsp
+  | _ -> assert false
 
 let () =
+  let host = ref None in
+  let port = ref 80 in
+
+  Arg.parse
+    [ ("-p", Set_int port, " Port number (80 by default)") ]
+    (fun host_argument -> host := Some host_argument)
+    "wscat.exe [-p N] HOST";
+
+  let host =
+    match !host with
+    | None -> failwith "No hostname provided"
+    | Some host -> host
+  in
+
+  Eio_unix.Ctf.with_tracing "wsaf.ctf" @@ fun () ->
   Eio_luv.run @@ fun env ->
-  let _dmgr = Eio.Stdenv.domain_mgr env in
-  Eio.Switch.run @@ fun _sw -> worker 0
-(* for i = 1 to 10 do
-     Eio.Fiber.fork ~sw @@ fun () ->
-     Eio.Domain_manager.run dmgr @@ fun () -> worker i
-   done *)
+  Switch.run @@ fun sw ->
+  let addresses =
+    Unix.getaddrinfo host (string_of_int !port) [ Unix.(AI_FAMILY PF_INET) ]
+    |> List.map (fun addr ->
+           match addr.Unix.ai_addr with
+           | Unix.ADDR_INET (inetaddr, port) ->
+               `Tcp (Eio_unix.Ipaddr.of_unix inetaddr, port)
+           | ADDR_UNIX name -> `Unix name)
+  in
+  let stdin, net = Eio.Stdenv.(stdin env, net env) in
+  let socket = Eio.Net.connect ~sw net (List.hd addresses) in
+  let nonce = "0123456789ABCDEF" in
+  let resource = "/" in
+  let port = !port in
+  let p, u = Promise.create () in
+  let _conn =
+    Ws_client.connect ~sw socket ~nonce ~host ~port ~resource ~error_handler
+      ~websocket_handler:(websocket_handler ~sw ~stdin u)
+  in
+  Promise.await p
+(* Ws_client.shutdown conn *)

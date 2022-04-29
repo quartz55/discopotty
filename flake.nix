@@ -123,7 +123,8 @@
                 disco = super.callPackage ./. { };
               };
             })
-          ];
+          ]
+          ++ dotsnix.overlays;
         };
       in
       rec {
