@@ -190,6 +190,13 @@ type t =
   | Channel_update of Models.Channel.t
   | Channel_delete of Models.Channel.t
   | Channel_pins_update of Channel_pins_update.t
+  (* TODO threads *)
+  | Thread_create
+  | Thread_update
+  | Thread_delete
+  | Thread_list_sync
+  | Thread_member_update
+  | Thread_members_update
   (* guilds *)
   | Guild_create of Models.Guild.t
   | Guild_update of Models.Guild.t
@@ -208,6 +215,23 @@ type t =
   | Guild_role_create of Guild_role.t
   | Guild_role_update of Guild_role.t
   | Guild_role_delete of Guild_role_id.t
+  (* TODO scheduled events *)
+  | Guild_scheduled_event_create
+  | Guild_scheduled_event_update
+  | Guild_scheduled_event_delete
+  | Guild_scheduled_event_user_add
+  | Guild_scheduled_event_user_remove
+  (* TODO integrations *)
+  | Integration_create
+  | Integration_update
+  | Integration_delete
+  (* TODO commands *)
+  | Application_command_create
+  | Application_command_update
+  | Application_command_delete
+  | Application_command_permissions_update
+  (* TODO interactions *)
+  | Interaction_create of Yojson.Safe.t
   (* TODO invites *)
   | Invite_create
   | Invite_delete
@@ -220,6 +244,10 @@ type t =
   | Message_reaction_remove of Message_reaction_remove.t
   | Message_reaction_remove_all of Message_reaction_remove_all.t
   | Message_reaction_remove_emoji of Message_reaction_remove_emoji.t
+  (* TODO stage instances *)
+  | Stage_instance_create
+  | Stage_instance_update
+  | Stage_instance_delete
   (* users *)
   | Presence_update of Presence.t
   | Typing_start of Typing_start.t
@@ -229,12 +257,6 @@ type t =
   | Voice_server_update of Voice_server_update.t
   (* TODO webhooks *)
   | Webhooks_update
-  (* TODO commands *)
-  | Application_command_create
-  | Application_command_update
-  | Application_command_delete
-  (* TODO interactions *)
-  | Interaction_create
   | Unsupported of string * Yojson.Safe.t option
 [@@deriving show]
 
@@ -308,6 +330,6 @@ let of_name name data =
   | "APPLICATION_COMMAND_CREATE", _ -> Application_command_create
   | "APPLICATION_COMMAND_UPDATE", _ -> Application_command_update
   | "APPLICATION_COMMAND_DELETE", _ -> Application_command_delete
-  (* TODO interactions *)
-  | "INTERACTION_CREATE", _ -> Interaction_create
+  (* interactions *)
+  | "INTERACTION_CREATE", Some d -> Interaction_create d
   | other, d -> Unsupported (other, d)

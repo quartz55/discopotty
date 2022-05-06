@@ -1,7 +1,5 @@
 open Eio.Std
-
-module Httpaf_server =
-  Disco_core.Httpaf_eio.Server (Disco_core.Gluten_eio.Server)
+module Httpaf_server = Httpaf_eio.Server (Gluten_eio.Server)
 
 let log_connection_error ex =
   traceln "Uncaught exception handling client: %a" Fmt.exn ex

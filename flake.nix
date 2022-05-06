@@ -14,6 +14,7 @@
       let
         pkgs = import nixpkgs {
           inherit system;
+          config.allowUnfree = true;
           overlays = [
             ocaml-overlays.overlay
             (self: super: { ocamlPackages = super.ocaml-ng.ocamlPackages_5_00; })

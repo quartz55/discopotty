@@ -49,7 +49,7 @@ type t = {
   ops : op Eio.Stream.t;
   mutable state : state;
   id_bucket : Token_bucket.t;
-  version : Versions.Gateway.t;
+  version : Version.t;
   mutable fwd : Events.t -> unit;
   token : string;
   uri : Uri.t;
@@ -71,7 +71,7 @@ let with_ws_params ?(zlib = false) ~enc ~version uri =
   let enc = match enc with `json -> "json" in
   let uri = Uri.with_path uri "/" in
   Uri.with_query uri
-    ([ ("encoding", [ enc ]); ("v", [ Versions.Gateway.to_string version ]) ]
+    ([ ("encoding", [ enc ]); ("v", [ Version.to_string version ]) ]
     @ if zlib then [ ("compress", [ "zlib-stream" ]) ] else [])
 
 let handshake ~sw ~token ~fwd ?reconn ws =
@@ -308,8 +308,8 @@ let manage ~sw ~net t =
   in
   Fun.protect ~finally:drain loop
 
-let create ~sw ~net ?(zlib = false) ?(version = Versions.Gateway.V8) ~fwd
-    ~id_bucket token uri =
+let create ~sw ~net ?(zlib = false) ?(version = Version.V9) ~fwd ~id_bucket
+    token uri =
   let uri = uri |> with_ws_params ~zlib ~version ~enc:`json in
 
   let p, u = Promise.create () in

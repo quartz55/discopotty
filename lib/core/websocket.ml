@@ -171,7 +171,6 @@ functor
     let close ?code t =
       if not @@ is_closed t then (
         Websocketaf.Wsd.close ?code t.wsd;
-        Fiber.yield ();
         Ws_client.shutdown t.conn)
 
     let rec _connect ~sw ~net ~enc ~zlib ~tls host port resource =
@@ -293,9 +292,14 @@ functor
         { Websocketaf.Client_connection.frame; eof }
       in
       L.info (fun m -> m "initiating websocket handshake");
+      let module Evloop_logger =
+      (val Relog.logger ~fields:Relog.Field.[ str "type" "ws" ] ())
+      in
       let nonce = gen_nonce 20 in
       let conn =
-        Ws_client.connect ~sw socket ~nonce ~host ~port ~resource ~error_handler
+        Ws_client.connect
+          ~l:(module Evloop_logger)
+          ~sw socket ~nonce ~host ~port ~resource ~error_handler
           ~websocket_handler
       in
       match Promise.await_exn p with

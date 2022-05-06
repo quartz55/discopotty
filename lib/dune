@@ -5,6 +5,7 @@
   (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
  (libraries
   disco.core
+  disco.http
   disco.models
   disco.utils
   containers

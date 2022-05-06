@@ -3,61 +3,6 @@
 Link for base permissions invite:
 [[https://discord.com/oauth2/authorize?client_id=235863322304577537&permissions=2184441408&scope=bot][boop]]
 
-* DOING Gateway Protocol
-
-** DONE Websocket connection handling
-** DONE Greeting/Identify protocol
-** DONE Session invalidation/reconnection handling
-Reasoning about idempotent handling of reconnections is,
-how should I put it, /*hard*/ ...
-*** DOING Find a way to actually test this
-...that doesn't involve just waiting for it to /(eventually)/ crash...
-
-Up to now I've been able to verify some things:
-- I probaly have to restart voice sessions as well
-- Base reconnection protocol (when receiving =RECONNECT= payload)
-is mostly working but getting a 1009 (message too big) after handshaking???
-
-** DONE Refactor Session
-It needs to be self-managed (to handle automatic reconnections)
-but also expose an API in order to transparently communicate with
-the Gateway. This will be needed later for "handling" gateway requests.
-
-*** DONE Simple Rate Limiting
-#+BEGIN_QUOTE
-Clients are allowed 120 events every 60 seconds, meaning you can send
-on average at a rate of up to 2 events per second. Clients who surpass
-this limit are immediately disconnected from the Gateway.
-#+END_QUOTE
-
-Don't really know what this means, but I'll stick with 2 events per second :p
-
-** DONE Refine Session
-Take some inspiration from ~voice.ml~
-
-*** DONE Investigate EOF reason in websockets
-WebsocketAF was the issue: fixed parser buffer size of 4kb
-(when =GUILD_READY= payloads can go well over that size)
-Submitted a PR [[https://github.com/anmonteiro/websocketaf/pull/25][here]]
-
-* TODO Sharding
-/Sharding is useful if only to decrease rate limiting bottlenecks./
-
-** TODO =IDENTIFY= Concurrency handling
-A global lock/token bucket should suffice.
-Maybe make it a map of ~(bot token)->(token bucket)~ in case the user
-wants to run multiple different bots in a single application 🤷‍♂️.
-
--------
-
-* DONE Voice Connection
-** DONE Voice Gateway Protocol
-*** DONE IP Discovery
-** DONE Voice UDP
-*** DONE Test soundbite
-
--------
-
 * DOING Music Player
 ** TODO Replace external ffmpeg/ffprobe process with libav
 - Will this be a PITA because of all the needed codecs
@@ -65,8 +10,8 @@ when building? /probably/
 - Is it worth it? /no/ (maybe it's actually worse given that ocaml-multicore isn't here yet 😿)
 - Is it fun? /yeah/ 😝
 
-** DONE youtube-dl support
-*** DONE Seamless caching
+** DOING youtube-dl support
+*** DOING Seamless caching
 This is relatively simple to do given that youtube-dl already
 generates unique ids for each track.
 
@@ -74,7 +19,7 @@ generates unique ids for each track.
 I reckon this is really only worth it if we do the libav thing.
 
 ** DOING Player abstraction
-*** DOING Make an actual ~Audio_stream~ type
+*** DONE Make an actual ~Audio_stream~ type
 
 -------
 
@@ -106,18 +51,6 @@ Ideas list:
 Using semantic tags: ~"@{<b>bold @{<i>bold_italic@}@} @{<i>italic@} @{<v>code@}"~
 ** DONE Utils
 Just a little helper to make it easier to build valid stylized messages
-
----------
-
-* DONE Model types & (de)serializers
-** DONE Complete Payloads types & (de)serializers
-
----------
-
-* TODO ETF encoding support
-Maybe too much work for what it's worth (~[@@deriving yojson]~ is ❤️)
-
-/Note to self: Doing ~etf->json~ is NOT the 'way'/
 
 ---------
 
@@ -161,8 +94,6 @@ these are the headers:
     (non-inclusive of major parameters in the route path)
 #+END_QUOTE
 
-** DONE Websockets (Gateway and Voice)
-
 ---------
 
 * TODO HTTP API implementation
@@ -170,11 +101,5 @@ Doesn't have to be fully done, just comprehensive enough for now.
 
 ---------
 
-* DONE Test framework
+* DOING Test framework
 Alcotest + QCheck 👍
-
----------
-
-* TODO Cull dependencies on the various libraries
-* TODO Research on virtual/private libraries vs Functors
-Leaning on functors for now

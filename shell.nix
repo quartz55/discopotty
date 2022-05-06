@@ -27,6 +27,7 @@ in
     ffmpeg
     youtube-dl
     mirage-trace-viewer-gtk
+    ngrok
   ] ++ lib.optionals stdenv.isDarwin [ fswatch ];
   propagatedBuildInputs = with pkgs.ocamlPackages; [
     alcotest

@@ -1,0 +1,21 @@
+(library
+ (name disco_http)
+ (public_name disco.http)
+ (wrapped false)
+ (private_modules
+  (:standard \ Disco_http))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
+ (libraries
+  disco.vendor
+  disco.utils
+  containers
+  relog.lib
+  uri
+  bigstringaf
+  httpaf
+  hxd.core
+  hxd.string
+  eio
+  eio_luv
+  eio.unix))

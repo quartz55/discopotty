@@ -22,29 +22,31 @@ let setup_logging () =
   let cli_fmter = Formatter.default ~color:true ~oneline:false () in
   let cli_fmt = Format.formatter_of_out_channel stderr in
   let mtx = Mutex.create () in
-  Logs.set_level ~all:true @@ Some Logs.Debug;
-  let report src lvl ~over k msgf =
-    let namespace = Logs.Src.name src in
-    let module L = (val Relog.logger ~namespace ()) in
-    let log =
-      match lvl with
-      | Logs.Error -> L.err
-      | Warning -> L.warn
-      | App | Info -> L.info
-      | Debug -> L.trace
-    in
-    let b = Buffer.create 80 in
-    let k _ =
-      log (fun m -> m "%s" (Buffer.to_bytes b |> Bytes.unsafe_to_string));
-      over ();
-      k ()
-    in
-    msgf @@ fun ?header:_ ?tags:_ fmt ->
-    let ppf = Format.formatter_of_buffer b in
-    Format.kfprintf k ppf fmt
-  in
-  let relog_logs_adapter = { Logs.report } in
-  Logs.set_reporter relog_logs_adapter;
+  (* FIXME need a mutex here *)
+  (* Logs.set_level ~all:true @@ Some Logs.Info;
+     let report src lvl ~over k msgf =
+       let namespace = Logs.Src.name src in
+       let module L = (val Relog.logger ~namespace ()) in
+       let log =
+         match lvl with
+         | Logs.Error -> L.err
+         | Warning -> L.warn
+         | App | Info -> L.info
+         | Debug -> L.trace
+       in
+       let b = Buffer.create 80 in
+       let k _ =
+         log (fun m -> m "%s" (Buffer.to_bytes b |> Bytes.unsafe_to_string));
+         (* FIXME some shennanigans happening here *)
+         over ();
+         k ()
+       in
+       msgf @@ fun ?header:_ ?tags:_ fmt ->
+       let ppf = Format.formatter_of_buffer b in
+       Format.kfprintf k ppf fmt
+     in
+     let relog_logs_adapter = { Logs.report } in
+     Logs.set_reporter relog_logs_adapter; *)
   let handler r =
     if Level.Infix.(Record.level r <= verbosity) then (
       Mutex.lock mtx;

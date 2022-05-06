@@ -18,10 +18,10 @@ module Client (Client_runtime : Gluten_eio.Client) = struct
   type runtime = Client_runtime.t
   type t = { connection : Httpaf.Client_connection.t; runtime : runtime }
 
-  let create_connection ?(config = Httpaf.Config.default) ~sw socket =
+  let create_connection ?l ?(config = Httpaf.Config.default) ~sw socket =
     let connection = Httpaf.Client_connection.create ~config in
     let runtime =
-      Client_runtime.create ~sw ~read_buffer_size:config.read_buffer_size
+      Client_runtime.create ?l ~sw ~read_buffer_size:config.read_buffer_size
         ~protocol:(module Httpaf.Client_connection)
         connection socket
     in

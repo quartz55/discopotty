@@ -1,5 +1,5 @@
 (tests
- (names token_bucket audio_stream http_server)
+ (names token_bucket audio_stream http_server http_client)
  (package disco)
  (libraries
   eio

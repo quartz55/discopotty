@@ -1,6 +1,4 @@
-module Ws_client =
-  Disco_core.Websocketaf_eio.Client (Disco_core.Gluten_eio.Client)
-
+module Ws_client = Websocketaf_eio.Client (Gluten_eio.Client)
 module Ws_payload = Websocketaf.Payload
 open Eio.Std
 

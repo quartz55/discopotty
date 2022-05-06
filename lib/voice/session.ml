@@ -2,13 +2,12 @@ open! Disco_core.Globals
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 module F = Relog.Field
 module Pl = Payload
-module Heartbeat = Disco_core.Heartbeat
 module Token_bucket = Lf_token_bucket
 
 exception Handshake_error of string
 exception Dead
 
-module Versions = struct
+module Version = struct
   type t = V4
 
   let to_string = function V4 -> "4"
@@ -64,7 +63,7 @@ type t = {
   uri : Uri.t;
   ops : op Eio.Stream.t;
   mutable state : state;
-  version : Versions.t;
+  version : Version.t;
   sw : Switch.t;
 }
 
@@ -88,7 +87,7 @@ let secret_of_int_list l =
 
 let with_ws_params ~version uri =
   let uri = Uri.with_path uri "/" in
-  Uri.with_query uri [ ("v", [ Versions.to_string version ]) ]
+  Uri.with_query uri [ ("v", [ Version.to_string version ]) ]
 
 let handshake ~sw ~net ~server_id ~user_id ~session_id ~token ?reconn ws =
   let module L =
@@ -285,7 +284,7 @@ let manage ~sw ~net t =
   in
   Fun.protect ~finally:drain loop
 
-let create ~sw ~net ?(version = Versions.V4) ~guild_id ~user_id ~channel_id
+let create ~sw ~net ?(version = Version.V4) ~guild_id ~user_id ~channel_id
     ~session_id ~token endpoint =
   let uri = Uri.of_string ("wss://" ^ endpoint) |> with_ws_params ~version in
 

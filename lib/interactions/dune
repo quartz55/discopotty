@@ -1,0 +1,21 @@
+(library
+ (name disco_interactions)
+ (public_name disco.interactions)
+ (wrapped false)
+ (private_modules
+  (:standard \ Disco_interactions))
+ (preprocess
+  (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
+ (libraries
+  disco.http
+  disco.vendor
+  disco.utils
+  containers
+  relog.lib
+  uri
+  httpaf
+  hxd.core
+  hxd.string
+  eio
+  eio_luv
+  eio.unix))

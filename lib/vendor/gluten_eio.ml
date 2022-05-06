@@ -1,4 +1,3 @@
-open! Globals
 open Eio.Std
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -7,15 +6,23 @@ module type IO = sig
   type addr
 
   val read :
-    socket -> Bigstringaf.t -> off:int -> len:int -> [ `Eof | `Ok of int ]
+    ?l:Relog.logger ->
+    socket ->
+    Bigstringaf.t ->
+    off:int ->
+    len:int ->
+    [ `Eof | `Ok of int ]
   (** The region [(off, off + len)] is where read bytes can be written to *)
 
   val writev :
-    socket -> Faraday.bigstring Faraday.iovec list -> [ `Closed | `Ok of int ]
+    ?l:Relog.logger ->
+    socket ->
+    Faraday.bigstring Faraday.iovec list ->
+    [ `Closed | `Ok of int ]
 
-  val shutdown_send : socket -> unit
-  val shutdown_receive : socket -> unit
-  val close : socket -> unit
+  val shutdown_send : ?l:Relog.logger -> socket -> unit
+  val shutdown_receive : ?l:Relog.logger -> socket -> unit
+  val close : ?l:Relog.logger -> socket -> unit
 end
 
 module type Server = sig
@@ -23,6 +30,7 @@ module type Server = sig
   type addr
 
   val create_upgradable_connection_handler :
+    ?l:Relog.logger ->
     read_buffer_size:int ->
     protocol:'t Gluten.runtime ->
     create_protocol:(('reqd -> unit) -> 't) ->
@@ -33,6 +41,7 @@ module type Server = sig
     unit
 
   val create_connection_handler :
+    ?l:Relog.logger ->
     read_buffer_size:int ->
     protocol:'t Gluten.runtime ->
     't ->
@@ -47,6 +56,7 @@ module type Client = sig
   type socket
 
   val create :
+    ?l:Relog.logger ->
     sw:Switch.t ->
     read_buffer_size:int ->
     protocol:'t Gluten.runtime ->
@@ -103,11 +113,13 @@ module IO_loop = struct
       type t fd.
       (module IO with type socket = fd) ->
       (module Gluten.RUNTIME with type t = t) ->
+      ?l:Relog.logger ->
       t ->
       read_buffer_size:int ->
       fd ->
       unit =
-   fun (module Io) (module Runtime) t ~read_buffer_size socket ->
+   fun (module Io) (module Runtime) ?(l = (module L)) t ~read_buffer_size socket ->
+    let module L = (val l) in
     let read_buffer = Buffer.create read_buffer_size in
     let rec read_loop ?(linger = None) () =
       match Runtime.next_read_operation t with
@@ -118,7 +130,7 @@ module IO_loop = struct
             | Some r ->
                 Fiber.yield ();
                 r
-            | None -> Buffer.put read_buffer (Io.read socket)
+            | None -> Buffer.put read_buffer (Io.read ~l socket)
           in
           match res with
           | `Eof ->
@@ -152,13 +164,13 @@ module IO_loop = struct
           read_loop ()
       | `Close ->
           L.trace (fun m -> m "read_loop: close");
-          Io.shutdown_receive socket
+          Io.shutdown_receive ~l socket
     in
     let rec write_loop () =
       match Runtime.next_write_operation t with
       | `Write io_vectors ->
           L.trace (fun m -> m "write_loop: write");
-          Io.writev socket io_vectors |> Runtime.report_write_result t;
+          Io.writev ~l socket io_vectors |> Runtime.report_write_result t;
           write_loop ()
       | `Yield ->
           let p, u = Promise.create () in
@@ -168,7 +180,7 @@ module IO_loop = struct
           write_loop ()
       | `Close n ->
           L.trace (fun m -> m "write_loop: close %d" n);
-          Io.shutdown_send socket
+          Io.shutdown_send ~l socket
     in
     let run () =
       Fiber.both
@@ -188,7 +200,7 @@ module IO_loop = struct
     Fun.protect
       ~finally:(fun () ->
         L.trace (fun m -> m "io_loop: done");
-        Io.close socket)
+        Io.close ~l socket)
       run
 end
 
@@ -199,16 +211,16 @@ module MakeServer (Io : IO) :
   type socket = Io.socket
   type addr = Io.addr
 
-  let create_connection_handler ~read_buffer_size ~protocol connection ~sw
+  let create_connection_handler ?l ~read_buffer_size ~protocol connection ~sw
       _client_addr socket =
     let connection = Server.create ~protocol connection in
     Switch.on_release sw (fun () -> Server.shutdown connection);
     IO_loop.start
       (module Io)
       (module Server)
-      connection ~read_buffer_size socket
+      ?l connection ~read_buffer_size socket
 
-  let create_upgradable_connection_handler ~read_buffer_size ~protocol
+  let create_upgradable_connection_handler ?l ~read_buffer_size ~protocol
       ~create_protocol ~request_handler ~sw client_addr socket =
     let connection =
       Server.create_upgradable ~protocol ~create:create_protocol
@@ -218,34 +230,58 @@ module MakeServer (Io : IO) :
     IO_loop.start
       (module Io)
       (module Server)
-      connection ~read_buffer_size socket
+      ?l connection ~read_buffer_size socket
 end
 
 module MakeClient (Io : IO) : Client with type socket = Io.socket = struct
   module Client_connection = Gluten.Client
 
   type socket = Io.socket
-  type t = { connection : Client_connection.t; socket : socket }
 
-  let create ~sw ~read_buffer_size ~protocol t socket =
+  type t = {
+    connection : Client_connection.t;
+    socket : socket;
+    logger : Relog.logger;
+  }
+
+  let create ?l ~sw ~read_buffer_size ~protocol t socket =
+    let namespace =
+      Option.bind l (fun (l : Relog.logger) ->
+          let module L = (val l) in
+          L.namespace)
+      |> function
+      | Some ns -> String.concat "." [ "Client"; ns ]
+      | None -> "Client"
+    in
+    let fields =
+      Option.map
+        (fun (l : Relog.logger) ->
+          let module L = (val l) in
+          L.fields |> Relog.Fields.to_seq |> List.of_seq)
+        l
+    in
+    let module L = (val Relog.child ~namespace ?fields (module L)) in
     let connection = Client_connection.create ~protocol t in
     Fiber.fork ~sw (fun () ->
         IO_loop.start
           (module Io)
           (module Client_connection)
+          ~l:(module L)
           connection ~read_buffer_size socket);
-    { connection; socket }
+    { connection; socket; logger = (module L) }
 
   let upgrade t protocol =
     Client_connection.upgrade_protocol t.connection protocol
 
   let shutdown t =
+    let module L = (val t.logger) in
     L.trace (fun m -> m "shutting client down");
-    Client_connection.shutdown t.connection;
-    Io.close t.socket
+    Client_connection.shutdown t.connection
 
   let is_closed t = Client_connection.is_closed t.connection
 end
+
+type eio_socket = < Eio.Flow.two_way ; Eio.Flow.close >
 
 module Eio_io :
   IO with type socket = eio_socket and type addr = Eio.Net.Sockaddr.stream =
@@ -253,18 +289,20 @@ struct
   type socket = eio_socket
   type addr = Eio.Net.Sockaddr.stream
 
-  let read socket bigstring ~off ~len =
+  let read ?(l : Relog.logger = (module L)) socket bigstring ~off ~len =
+    let module L = (val l) in
     L.trace (fun m -> m "reading up to %dB from eio socket" (len - off));
     let buf = Cstruct.of_bigarray bigstring ~off ~len in
     match Eio.Flow.read socket buf with
     | got ->
         L.trace (fun m -> m "read %dB" got);
         `Ok got
-    | (exception End_of_file) | (exception Eio.Net.Connection_reset _) ->
+    | (exception Eio.Net.Connection_reset _) | (exception End_of_file) ->
         L.trace (fun m -> m "EOF");
         `Eof
 
-  let writev socket iovecs =
+  let writev ?(l : Relog.logger = (module L)) socket iovecs =
+    let module L = (val l) in
     L.trace (fun m -> m "writting %d iovecs to eio socket" (List.length iovecs));
     let source =
       iovecs
@@ -291,15 +329,18 @@ struct
     ->
       ()
 
-  let shutdown_send socket =
+  let shutdown_send ?(l : Relog.logger = (module L)) socket =
+    let module L = (val l) in
     L.trace (fun m -> m "shutdown_send eio socket");
     shutdown socket `Send
 
-  let shutdown_receive socket =
+  let shutdown_receive ?(l : Relog.logger = (module L)) socket =
+    let module L = (val l) in
     L.trace (fun m -> m "shutdown_receive eio socket");
     try shutdown socket `Receive with Failure _ -> ()
 
-  let close socket =
+  let close ?(l : Relog.logger = (module L)) socket =
+    let module L = (val l) in
     L.trace (fun m -> m "closing eio socket");
     shutdown socket `All
 end

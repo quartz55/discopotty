@@ -11,7 +11,12 @@ module type Voice_manager_intf = sig
 end
 
 module Make (Voice : Voice_manager_intf) = struct
-  type t = { http : Http.t; gw : Gateway.t; cache : Cache.t; voice : Voice.t }
+  type t = {
+    http : Disco_http.t;
+    gw : Gateway.t;
+    cache : Cache.t;
+    voice : Voice.t;
+  }
 
   type create_msg = { content : string; nonce : string; tts : bool }
   [@@deriving yojson]
@@ -23,7 +28,7 @@ module Make (Voice : Voice_manager_intf) = struct
         (Models.Snowflake.to_string channel_id)
     in
     let ser = yojson_of_create_msg msg in
-    match Http.post ~body:ser uri http with
+    match Disco_http.post ~body:ser uri http with
     | Ok _ -> ()
     | Error _ -> L.error (fun m -> m "error sending message")
 
@@ -40,9 +45,9 @@ module Make (Voice : Voice_manager_intf) = struct
     let dmgr = Eio.Stdenv.domain_mgr env in
     Switch.run @@ fun sw ->
     L.info (fun m -> m "creating HTTP client");
-    let http = Http.create ~sw ~net token in
+    let http = Disco_http.create ~net token in
     L.debug (fun m -> m "getting gateway url");
-    let gw_info = Http.get_gateway_info http in
+    let gw_info = Disco_http.get_gateway_info http in
     let url, max_concurrency =
       match gw_info with
       | Fallback { url; max_concurrency } -> (url, max_concurrency)

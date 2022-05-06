@@ -4,6 +4,7 @@
  (preprocess
   (pps ppx_deriving.show ppx_deriving.ord ppx_yojson_conv))
  (libraries
+  disco.vendor
   disco.models
   disco.utils
   containers
@@ -24,5 +25,4 @@
   hxd.core
   hxd.string
   sodium
-  opus
   websocketaf))

@@ -1,4 +1,4 @@
-open! Globals
+open Containers
 module Flow = Eio.Flow
 module L = (val Relog.logger ~namespace:__MODULE__ ())
 
@@ -130,7 +130,7 @@ let close t =
       (* XXX: need a switch here *)
       let _ = copy (Flow.cstruct_source [ buf ]) t.flow in
       L.trace (fun m -> m "closing underlying flow");
-      Flow.close t.flow;
+      Flow.shutdown t.flow `Send;
       L.trace (fun m -> m "closed underlying flow")
   | _ -> L.trace (fun m -> m "already closed")
 
@@ -203,7 +203,7 @@ let wrap t =
               copy (Flow.cstruct_source [ buf ]) t.flow |> check_write t)
 
     method close = close t
-    method shutdown = function `All -> close t | _ -> ()
+    method shutdown = function `All | `Send -> close t | `Receive -> ()
   end
 
 let client_of_flow ~sw conf ?host flow =
